@@ -1,0 +1,28 @@
+name: chess_analyzer
+description: "Chess position analyzer with a real Stockfish engine (no image recognition)."
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+  # Real, legal chess move generation / FEN / SAN (Dart port of chess.js)
+  chess: ^0.8.1
+  # Real Stockfish engine compiled from source via Dart FFI (Android + iOS)
+  stockfish_chess_engine: ^0.8.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/pieces/classic/
+    - assets/pieces/flat/
+    - assets/pieces/wood/
