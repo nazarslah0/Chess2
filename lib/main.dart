@@ -297,11 +297,18 @@ class _HomeScreenState extends State<HomeScreen> {
         for (final move
             in legalMoves) {
           try {
+            // ملاحظة: move.from / move.to في حزمة chess
+            // عبارة عن فهارس أعداد صحيحة (0x88)، وليست
+            // نصوصًا جبرية مثل "e2". لذلك يجب استخدام
+            // fromAlgebraic / toAlgebraic للمقارنة، وليس
+            // move.from.toString() الذي يعيد رقمًا لا
+            // يطابق "e2" أبدًا (وهو ما كان يجعل كل نقلة
+            // تُعتبر غير قانونية دائمًا).
             final moveFrom =
-                move.from.toString();
+                move.fromAlgebraic;
 
             final moveTo =
-                move.to.toString();
+                move.toAlgebraic;
 
             if (moveFrom != from ||
                 moveTo != to) {
@@ -311,8 +318,7 @@ class _HomeScreenState extends State<HomeScreen> {
             if (promotion != null) {
               final movePromotion =
                   move.promotion
-                      ?.toString()
-                      .toLowerCase();
+                      ?.toLowerCase();
 
               if (movePromotion !=
                   promotion) {
