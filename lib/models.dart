@@ -896,11 +896,16 @@ class GameState extends ChangeNotifier {
       final result =
           <String>{};
 
+      // ملاحظة: مع verbose=true، حزمة chess تعيد
+      // كائنات Move حقيقية (وليست Map كما في chess.js
+      // في جافاسكريبت). لذلك نستخدم toAlgebraic بدل
+      // قراءة item['to'] التي لا تعمل أبدًا مع هذه
+      // الحزمة (وهو ما كان يجعل قائمة النقلات
+      // القانونية فارغة دائمًا).
       for (final item in raw) {
-        if (item is Map &&
-            item['to'] is String) {
+        if (item is ch.Move) {
           result.add(
-            item['to'] as String,
+            item.toAlgebraic,
           );
         }
       }
@@ -940,6 +945,19 @@ class GameState extends ChangeNotifier {
           promotion;
     }
 
+    // نحفظ لون اللاعب الذي ينقل *قبل* تنفيذ النقلة،
+    // لأن chess.turn يتغير فور نجاح move().
+    //
+    // ملاحظة: chess.getHistory({'verbose': true}) يعيد
+    // كائنات Move حقيقية (ليست Map)، وMove لا تملك حقل
+    // 'san' أو 'color' جاهزًا، لذلك القراءة القديمة
+    // (verbose.last as Map) كانت تفشل بصمت في كل مرة،
+    // وتجعل كل نقلة تُسجَّل كأنها نقلة أبيض.
+    final movingColor =
+        chess.turn == ch.Color.WHITE
+            ? 'w'
+            : 'b';
+
     try {
       final result =
           chess.move(args);
@@ -949,44 +967,21 @@ class GameState extends ChangeNotifier {
       }
 
       String san = '';
-      String color = 'w';
+      final color = movingColor;
 
       try {
-        final verbose =
-            chess.getHistory(
-          <String, dynamic>{
-            'verbose': true,
-          },
-        );
+        final simple =
+            chess.getHistory();
 
-        if (verbose.isNotEmpty &&
-            verbose.last is Map) {
-          final move =
-              verbose.last as Map;
-
+        if (simple.isNotEmpty) {
           san =
-              '${move['san'] ?? ''}';
-
-          color =
-              '${move['color'] ?? 'w'}';
+              '${simple.last}';
         }
       } catch (_) {}
 
       if (san.isEmpty) {
-        try {
-          final simple =
-              chess.getHistory();
-
-          if (simple.isNotEmpty) {
-            san =
-                '${simple.last}';
-          }
-        } catch (_) {}
-
-        if (san.isEmpty) {
-          san =
-              '$from-$to';
-        }
+        san =
+            '$from-$to';
       }
 
       history = [
