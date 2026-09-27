@@ -58,6 +58,10 @@ jobs:
             "platform-tools" \
             "ndk;27.2.12479018"
 
+          echo "========================================"
+          echo "Android SDK"
+          echo "========================================"
+
           echo "ANDROID_HOME=$ANDROID_HOME"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018"
 
@@ -75,6 +79,100 @@ jobs:
             --org com.chessanalyzer \
             --project-name chess \
             .
+
+      # =========================================================
+      # Fix Android packaging
+      # =========================================================
+      # Android no longer allows explicitly setting
+      # android:extractNativeLibs="true" in AndroidManifest.xml.
+      #
+      # Instead we use:
+      #
+      # packagingOptions {
+      #     jniLibs {
+      #         useLegacyPackaging = true
+      #     }
+      # }
+      #
+      # This is required because Stockfish is shipped as
+      # libstockfish.so and must be extracted to
+      # applicationInfo.nativeLibraryDir so it can be executed.
+      # =========================================================
+      - name: Configure Android native library packaging
+        shell: bash
+        run: |
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          manifest = Path(
+              "android/app/src/main/AndroidManifest.xml"
+          )
+
+          if not manifest.exists():
+              raise SystemExit(
+                  "AndroidManifest.xml not found"
+              )
+
+          text = manifest.read_text()
+
+          # Remove any existing extractNativeLibs attribute.
+          text = text.replace(
+              ' android:extractNativeLibs="true"',
+              ''
+          )
+
+          text = text.replace(
+              ' android:extractNativeLibs="false"',
+              ''
+          )
+
+          manifest.write_text(text)
+
+          print("========================================")
+          print("AndroidManifest.xml fixed")
+          print("========================================")
+          print(text)
+          PY
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          gradle_file = Path(
+              "android/app/build.gradle"
+          )
+
+          if not gradle_file.exists():
+              raise SystemExit(
+                  "android/app/build.gradle not found"
+              )
+
+          text = gradle_file.read_text()
+
+          block = r'''
+
+          // =======================================================
+          // Stockfish native library packaging
+          // =======================================================
+          android {
+              packagingOptions {
+                  jniLibs {
+                      useLegacyPackaging = true
+                  }
+              }
+          }
+          '''
+
+          if "useLegacyPackaging" not in text:
+              text += block
+
+          gradle_file.write_text(text)
+
+          print("========================================")
+          print("android/app/build.gradle")
+          print("========================================")
+          print(text)
+          PY
 
       # =========================================================
       # Configure Stockfish native bridge
@@ -232,23 +330,13 @@ jobs:
                           return true
                       }
 
-                      // =============================================
-                      // Locate Stockfish inside the app's native
-                      // library directory.
+                      // =================================================
+                      // Stockfish is packaged as:
                       //
-                      // IMPORTANT: since Android 10 (API 29), the OS
-                      // blocks execution of any file written to
-                      // app-private storage (filesDir) at runtime
-                      // (W^X policy) — that used to cause
-                      // STOCKFISH_START_FAILED on every device.
+                      // lib/arm64-v8a/libstockfish.so
                       //
-                      // Files under nativeLibraryDir are extracted by
-                      // the installer itself and are explicitly
-                      // allowed to be executed, so we ship Stockfish
-                      // as "libstockfish.so" under jniLibs and run it
-                      // straight from there instead of copying it
-                      // anywhere.
-                      // =============================================
+                      // Android extracts it into nativeLibraryDir.
+                      // =================================================
 
                       val stockfishFile =
                           File(
@@ -260,7 +348,7 @@ jobs:
 
                           eventSink?.error(
                               "STOCKFISH_NOT_FOUND",
-                              "ملف Stockfish غير موجود",
+                              "ملف Stockfish غير موجود: ${stockfishFile.absolutePath}",
                               null
                           )
 
@@ -268,6 +356,7 @@ jobs:
                       }
 
                       if (!stockfishFile.canExecute()) {
+
                           stockfishFile.setExecutable(
                               true,
                               false
@@ -285,9 +374,9 @@ jobs:
                           return false
                       }
 
-                      // =============================================
-                      // Start process
-                      // =============================================
+                      // =================================================
+                      // Start Stockfish process
+                      // =================================================
 
                       stockfishProcess =
                           ProcessBuilder(
@@ -300,9 +389,9 @@ jobs:
                           stockfishProcess
                               ?: return false
 
-                      // =============================================
+                      // =================================================
                       // Read Stockfish output
-                      // =============================================
+                      // =================================================
 
                       Thread {
 
@@ -456,29 +545,6 @@ jobs:
             android/app/src/main/kotlin/com/chessanalyzer/chess/MainActivity.kt
 
       # =========================================================
-      # Force extraction of native libraries
-      # =========================================================
-      # By default (AGP / Android 6+), .so files can be kept
-      # compressed *inside* the APK and mapped directly from
-      # there instead of being extracted to disk. We need a real,
-      # standalone, executable file at nativeLibraryDir at
-      # runtime (see MainActivity.kt), so we force legacy
-      # extraction here.
-      - name: Force native library extraction
-        shell: bash
-        run: |
-
-          sed -i \
-            's/<application/<application android:extractNativeLibs="true"/' \
-            android/app/src/main/AndroidManifest.xml
-
-          echo "========================================"
-          echo "AndroidManifest.xml"
-          echo "========================================"
-
-          cat android/app/src/main/AndroidManifest.xml
-
-      # =========================================================
       # Download official Stockfish 19
       # =========================================================
       - name: Download Stockfish 19
@@ -567,14 +633,6 @@ jobs:
       # =========================================================
       # Prepare Stockfish native library
       # =========================================================
-      # Ship the Stockfish binary as "libstockfish.so" under
-      # jniLibs/arm64-v8a instead of as a plain asset. Files
-      # here are extracted by the installer into
-      # applicationInfo.nativeLibraryDir with the execute
-      # permission needed to run them as a subprocess — plain
-      # assets/filesDir copies are blocked from executing on
-      # Android 10+ (W^X policy), which is what caused
-      # STOCKFISH_START_FAILED.
       - name: Prepare Stockfish native files
         shell: bash
         run: |
