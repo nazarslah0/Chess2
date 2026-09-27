@@ -1,5 +1,7 @@
 import 'dart:async';
 
+
+
 import 'package:flutter/services.dart';
 
 /// نتيجة سطر واحد من MultiPV صادر من Stockfish.
@@ -53,6 +55,8 @@ class EngineService {
   int _requestedDepth = 18;
   int _requestedMultiPv = 3;
 
+  Completer<void>? _readyCompleter;
+
   // ============================================================
   // Callbacks
   // ============================================================
@@ -96,6 +100,11 @@ class EngineService {
           ready = false;
           analyzing = false;
           _starting = false;
+
+          final completer = _readyCompleter;
+          if (completer != null && !completer.isCompleted) {
+            completer.completeError(error);
+          }
 
           onStatus?.call(
             '🔴 خطأ في اتصال Stockfish: $error',
@@ -225,6 +234,11 @@ class EngineService {
       ready = true;
       _starting = false;
 
+      final completer = _readyCompleter;
+      if (completer != null && !completer.isCompleted) {
+        completer.complete();
+      }
+
       onStatus?.call(
         '🟢 Stockfish 19 جاهز',
       );
@@ -261,8 +275,26 @@ class EngineService {
       '🟡 Stockfish 19 متصل...',
     );
 
-    // التأكد من أن المحرك جاهز.
+    // بعد uciok يجب انتظار readyok قبل إرسال position/go.
+    _readyCompleter ??= Completer<void>();
     _send('isready');
+  }
+
+  Future<bool> _waitUntilReady({
+    Duration timeout = const Duration(seconds: 8),
+  }) async {
+    if (ready) {
+      return true;
+    }
+
+    _readyCompleter ??= Completer<void>();
+
+    try {
+      await _readyCompleter!.future.timeout(timeout);
+      return ready;
+    } catch (_) {
+      return ready;
+    }
   }
 
   // ============================================================
@@ -503,7 +535,10 @@ class EngineService {
       // محاولة تشغيله تلقائيًا.
       await init();
 
-      if (!ready) {
+      if (!await _waitUntilReady()) {
+        onStatus?.call(
+          '🔴 Stockfish لم يرسل readyok خلال المهلة',
+        );
         return;
       }
     }
@@ -555,7 +590,17 @@ class EngineService {
 
     await _send('setoption name MultiPV value $_requestedMultiPv');
 
+    // مزامنة حقيقية مع المحرك: لا نرسل position/go قبل readyok.
+    _readyCompleter = Completer<void>();
     await _send('isready');
+
+    if (!await _waitUntilReady()) {
+      analyzing = false;
+      onStatus?.call(
+        '🔴 Stockfish لم يصبح جاهزًا للتحليل',
+      );
+      return;
+    }
 
     await _send(
       'position fen $_analyzedFen',
@@ -611,6 +656,7 @@ class EngineService {
     analyzing = false;
     ready = false;
     _starting = false;
+    _readyCompleter = null;
 
     try {
       await _methodChannel.invokeMethod<void>(

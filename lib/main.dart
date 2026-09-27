@@ -166,8 +166,39 @@ class _HomeScreenState extends State<HomeScreen> {
     engine.onBestMove = (
       String uci,
     ) {
-      // bestmove يعني أن البحث انتهى.
-      // لا نغير وضعية الرقعة.
+      // بعض إصدارات/بناءات Stockfish قد ترسل bestmove
+      // بدون أن تصل آخر info/pv إلى EventChannel.
+      // في هذه الحالة نستخدم bestmove نفسه كحل احتياطي
+      // حتى لا ينتهي التحليل بواجهة فارغة وبدون سهم.
+      if (!mounted) {
+        return;
+      }
+
+      final analysisFen = _analysisFen;
+      if (analysisFen == null ||
+          analysisFen.trim() != state.currentFen.trim()) {
+        return;
+      }
+
+      final clean = uci.trim().toLowerCase();
+      if (!_isValidUciMove(clean)) {
+        return;
+      }
+
+      // إذا وصل PV بالفعل، فلا نستبدله.
+      if (pvLines.containsKey(1)) {
+        return;
+      }
+
+      setState(() {
+        pvLines[1] = PvLineDisplay(
+          depth: depth,
+          evalLabel: '—',
+          moves: <String>[clean],
+          bestFrom: clean.substring(0, 2),
+          bestTo: clean.substring(2, 4),
+        );
+      });
     };
 
     // تشغيل Stockfish 19.
@@ -227,6 +258,25 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
+  bool _isValidUciMove(String uci) {
+    if (uci.length < 4) {
+      return false;
+    }
+
+    bool validSquare(String value) {
+      if (value.length != 2) {
+        return false;
+      }
+      final file = value.codeUnitAt(0);
+      final rank = value.codeUnitAt(1);
+      return file >= 97 && file <= 104 &&
+          rank >= 49 && rank <= 56;
+    }
+
+    return validSquare(uci.substring(0, 2)) &&
+        validSquare(uci.substring(2, 4));
+  }
+
   // ==========================================================
   // Convert UCI PV to SAN
   // ==========================================================
@@ -267,121 +317,26 @@ class _HomeScreenState extends State<HomeScreen> {
     String bestFrom = '';
     String bestTo = '';
 
-    for (final uci
+    for (final uciRaw
         in raw.uciMoves) {
-      if (uci.length < 4) {
+      final uci = uciRaw.trim().toLowerCase();
+
+      // أهم نقطة: لا نجعل فشل تحويل SAN يمنع ظهور
+      // نتيجة Stockfish والسهم. UCI نفسه كافٍ لرسم السهم.
+      if (!_isValidUciMove(uci)) {
         break;
       }
 
-      final from =
-          uci.substring(0, 2);
-
-      final to =
-          uci.substring(2, 4);
+      final from = uci.substring(0, 2);
+      final to = uci.substring(2, 4);
 
       String? promotion;
-
       if (uci.length >= 5) {
-        promotion =
-            uci
-                .substring(4, 5)
-                .toLowerCase();
+        promotion = uci.substring(4, 5);
       }
 
       // ------------------------------------------------------
-      // تحقق من أن النقلة موجودة ضمن النقلات القانونية.
-      // ------------------------------------------------------
-
-      bool isLegal = false;
-
-      try {
-        final legalMoves =
-            chess.moves(
-          <String, dynamic>{
-            'verbose': true,
-          },
-        );
-
-        for (final move
-            in legalMoves) {
-          try {
-            // ملاحظة: move.from / move.to في حزمة chess
-            // عبارة عن فهارس أعداد صحيحة (0x88)، وليست
-            // نصوصًا جبرية مثل "e2". لذلك يجب استخدام
-            // fromAlgebraic / toAlgebraic للمقارنة، وليس
-            // move.from.toString() الذي يعيد رقمًا لا
-            // يطابق "e2" أبدًا (وهو ما كان يجعل كل نقلة
-            // تُعتبر غير قانونية دائمًا).
-            final moveFrom =
-                move.fromAlgebraic;
-
-            final moveTo =
-                move.toAlgebraic;
-
-            if (moveFrom != from ||
-                moveTo != to) {
-              continue;
-            }
-
-            if (promotion != null) {
-              final movePromotion =
-                  move.promotion
-                      ?.toLowerCase();
-
-              if (movePromotion !=
-                  promotion) {
-                continue;
-              }
-            }
-
-            isLegal = true;
-            break;
-          } catch (_) {
-            // بعض إصدارات الحزمة
-            // قد تعيد تمثيلًا مختلفًا.
-          }
-        }
-      } catch (_) {
-        isLegal = false;
-      }
-
-      if (!isLegal) {
-        // لا نسمح بظهور سهم لنقلة
-        // غير موجودة فعليًا.
-        break;
-      }
-
-      // ------------------------------------------------------
-      // تنفيذ النقلة على نسخة التحليل.
-      // ------------------------------------------------------
-
-      final args =
-          <String, dynamic>{
-        'from': from,
-        'to': to,
-      };
-
-      if (promotion != null) {
-        args['promotion'] =
-            promotion;
-      }
-
-      dynamic result;
-
-      try {
-        result =
-            chess.move(args);
-      } catch (_) {
-        result = null;
-      }
-
-      if (result == null ||
-          result == false) {
-        break;
-      }
-
-      // ------------------------------------------------------
-      // أول نقلة هي السهم الرئيسي.
+      // النقلة الأولى تُستخدم للسهم فورًا.
       // ------------------------------------------------------
 
       if (bestFrom.isEmpty) {
@@ -390,25 +345,83 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       // ------------------------------------------------------
-      // الحصول على SAN.
+      // حاول تنفيذ PV على نسخة الشطرنج لتحويله إلى SAN.
+      // إذا فشل ذلك، نعرض UCI بدل إسقاط النتيجة كلها.
       // ------------------------------------------------------
 
-      String san =
-          '$from$to';
+      dynamic legalMove;
 
       try {
-        final history =
-            chess.getHistory(
-          <String, dynamic>{
-            'verbose': false,
-          },
+        final legalMoves = chess.moves(
+          <String, dynamic>{'verbose': true},
         );
 
-        if (history.isNotEmpty) {
-          san =
-              history.last.toString();
+        for (final move in legalMoves) {
+          try {
+            final moveFrom = move.fromAlgebraic;
+            final moveTo = move.toAlgebraic;
+
+            if (moveFrom != from || moveTo != to) {
+              continue;
+            }
+
+            if (promotion != null) {
+              final promotionText =
+                  move.promotion?.toString().toLowerCase() ?? '';
+              final expected = promotion;
+              final matches =
+                  promotionText == expected ||
+                  (expected == 'q' && promotionText.contains('queen')) ||
+                  (expected == 'r' && promotionText.contains('rook')) ||
+                  (expected == 'b' && promotionText.contains('bishop')) ||
+                  (expected == 'n' && promotionText.contains('knight'));
+
+              if (!matches) {
+                continue;
+              }
+            }
+
+            legalMove = move;
+            break;
+          } catch (_) {}
         }
+      } catch (_) {
+        legalMove = null;
+      }
+
+      if (legalMove == null) {
+        // لا نحذف السهم الرئيسي، لكن لا نكمل PV بعد
+        // أول نقلة غير قابلة للتحويل.
+        if (sans.isEmpty) {
+          sans.add(uci);
+        }
+        break;
+      }
+
+      // ------------------------------------------------------
+      // الحصول على SAN قبل تنفيذ النقلة.
+      // move_to_san هو التحويل الصحيح في chess 0.8.1.
+      // ------------------------------------------------------
+
+      String san = uci;
+      try {
+        san = chess.move_to_san(legalMove);
       } catch (_) {}
+
+      // تنفيذ النقلة على نسخة التحليل.
+      bool moved = false;
+      try {
+        moved = chess.move(legalMove);
+      } catch (_) {
+        moved = false;
+      }
+
+      if (!moved) {
+        if (sans.isEmpty) {
+          sans.add(uci);
+        }
+        break;
+      }
 
       sans.add(san);
 
