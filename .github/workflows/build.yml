@@ -81,26 +81,15 @@ jobs:
             .
 
       # =========================================================
-      # Fix Android packaging
-      # =========================================================
-      # Android no longer allows explicitly setting
-      # android:extractNativeLibs="true" in AndroidManifest.xml.
-      #
-      # Instead we use:
-      #
-      # packagingOptions {
-      #     jniLibs {
-      #         useLegacyPackaging = true
-      #     }
-      # }
-      #
-      # This is required because Stockfish is shipped as
-      # libstockfish.so and must be extracted to
-      # applicationInfo.nativeLibraryDir so it can be executed.
+      # Configure Android native library packaging
       # =========================================================
       - name: Configure Android native library packaging
         shell: bash
         run: |
+
+          echo "========================================"
+          echo "Fix AndroidManifest.xml"
+          echo "========================================"
 
           python3 - <<'PY'
           from pathlib import Path
@@ -116,7 +105,7 @@ jobs:
 
           text = manifest.read_text()
 
-          # Remove any existing extractNativeLibs attribute.
+          # Remove extractNativeLibs if it exists.
           text = text.replace(
               ' android:extractNativeLibs="true"',
               ''
@@ -129,31 +118,93 @@ jobs:
 
           manifest.write_text(text)
 
-          print("========================================")
-          print("AndroidManifest.xml fixed")
-          print("========================================")
-          print(text)
+          print("AndroidManifest.xml fixed.")
           PY
 
-          python3 - <<'PY'
+          echo "========================================"
+          echo "Find Android Gradle files"
+          echo "========================================"
+
+          find android \
+            -maxdepth 4 \
+            -type f \
+            \( \
+              -name "build.gradle" \
+              -o \
+              -name "build.gradle.kts" \
+            \) \
+            -print
+
+          echo "========================================"
+          echo "Configure Gradle packaging"
+          echo "========================================"
+
+          # -------------------------------------------------------
+          # Kotlin DSL
+          # -------------------------------------------------------
+          if [ -f "android/app/build.gradle.kts" ]; then
+
+            echo "Using Kotlin DSL:"
+            echo "android/app/build.gradle.kts"
+
+            python3 - <<'PY'
           from pathlib import Path
 
-          gradle_file = Path(
-              "android/app/build.gradle"
+          p = Path(
+              "android/app/build.gradle.kts"
           )
 
-          if not gradle_file.exists():
-              raise SystemExit(
-                  "android/app/build.gradle not found"
-              )
+          text = p.read_text()
 
-          text = gradle_file.read_text()
+          if "useLegacyPackaging" not in text:
 
-          block = r'''
+              text += r'''
 
           // =======================================================
           // Stockfish native library packaging
           // =======================================================
+
+          android {
+              packaging {
+                  jniLibs {
+                      useLegacyPackaging = true
+                  }
+              }
+          }
+          '''
+
+          p.write_text(text)
+
+          print(
+              "Added useLegacyPackaging to build.gradle.kts"
+          )
+          PY
+
+          # -------------------------------------------------------
+          # Groovy DSL
+          # -------------------------------------------------------
+          elif [ -f "android/app/build.gradle" ]; then
+
+            echo "Using Groovy DSL:"
+            echo "android/app/build.gradle"
+
+            python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path(
+              "android/app/build.gradle"
+          )
+
+          text = p.read_text()
+
+          if "useLegacyPackaging" not in text:
+
+              text += r'''
+
+          // =======================================================
+          // Stockfish native library packaging
+          // =======================================================
+
           android {
               packagingOptions {
                   jniLibs {
@@ -163,16 +214,41 @@ jobs:
           }
           '''
 
-          if "useLegacyPackaging" not in text:
-              text += block
+          p.write_text(text)
 
-          gradle_file.write_text(text)
-
-          print("========================================")
-          print("android/app/build.gradle")
-          print("========================================")
-          print(text)
+          print(
+              "Added useLegacyPackaging to build.gradle"
+          )
           PY
+
+          # -------------------------------------------------------
+          # No Gradle file
+          # -------------------------------------------------------
+          else
+
+            echo "ERROR: No Android app Gradle file found."
+
+            echo "Available Gradle files:"
+
+            find android \
+              -maxdepth 6 \
+              -type f \
+              -name "*.gradle*" \
+              -print
+
+            exit 1
+
+          fi
+
+          echo "========================================"
+          echo "Final Android Gradle configuration"
+          echo "========================================"
+
+          if [ -f "android/app/build.gradle.kts" ]; then
+            cat android/app/build.gradle.kts
+          else
+            cat android/app/build.gradle
+          fi
 
       # =========================================================
       # Configure Stockfish native bridge
@@ -330,14 +406,6 @@ jobs:
                           return true
                       }
 
-                      // =================================================
-                      // Stockfish is packaged as:
-                      //
-                      // lib/arm64-v8a/libstockfish.so
-                      //
-                      // Android extracts it into nativeLibraryDir.
-                      // =================================================
-
                       val stockfishFile =
                           File(
                               applicationInfo.nativeLibraryDir,
@@ -375,7 +443,7 @@ jobs:
                       }
 
                       // =================================================
-                      // Start Stockfish process
+                      // Start Stockfish
                       // =================================================
 
                       stockfishProcess =
@@ -449,7 +517,7 @@ jobs:
               }
 
               // =====================================================
-              // Send command to Stockfish
+              // Send command
               // =====================================================
 
               private fun sendCommand(
