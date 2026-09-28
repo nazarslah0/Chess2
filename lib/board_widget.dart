@@ -81,7 +81,12 @@ class BoardWidget extends StatelessWidget {
             child: SizedBox(
               width: size,
               height: size,
-              child: Stack(
+              // الرقعة يجب أن تبقى LTR دائمًا حتى في الواجهة العربية،
+              // وإلا ينعكس ترتيب الأعمدة في GridView بينما يُرسم السهم
+              // بإحداثيات LTR، فيظهر السهم معكوسًا.
+              child: Directionality(
+                textDirection: TextDirection.ltr,
+                child: Stack(
                 children: [
                   // ==================================================
                   // الرقعة
@@ -302,6 +307,7 @@ class BoardWidget extends StatelessWidget {
                       ),
                     ),
                 ],
+              ),
               ),
             ),
           );

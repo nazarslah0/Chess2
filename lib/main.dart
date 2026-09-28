@@ -345,73 +345,38 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       // ------------------------------------------------------
-      // حاول تنفيذ PV على نسخة الشطرنج لتحويله إلى SAN.
-      // إذا فشل ذلك، نعرض UCI بدل إسقاط النتيجة كلها.
+      // البحث عن النقلة بين النقلات القانونية للحصول على SAN،
+      // ثم تنفيذها على نسخة التحليل لمتابعة الـ PV.
+      // إذا فشل ذلك نعرض UCI بدل إسقاط النتيجة كلها.
       // ------------------------------------------------------
 
-      dynamic legalMove;
+      final legal = GameState.findLegalMove(
+        chess,
+        from,
+        to,
+        promotion,
+      );
 
-      try {
-        final legalMoves = chess.moves(
-          <String, dynamic>{'verbose': true},
-        );
-
-        for (final move in legalMoves) {
-          try {
-            final moveFrom = move.fromAlgebraic;
-            final moveTo = move.toAlgebraic;
-
-            if (moveFrom != from || moveTo != to) {
-              continue;
-            }
-
-            if (promotion != null) {
-              final promotionText =
-                  move.promotion?.toString().toLowerCase() ?? '';
-              final expected = promotion;
-              final matches =
-                  promotionText == expected ||
-                  (expected == 'q' && promotionText.contains('queen')) ||
-                  (expected == 'r' && promotionText.contains('rook')) ||
-                  (expected == 'b' && promotionText.contains('bishop')) ||
-                  (expected == 'n' && promotionText.contains('knight'));
-
-              if (!matches) {
-                continue;
-              }
-            }
-
-            legalMove = move;
-            break;
-          } catch (_) {}
-        }
-      } catch (_) {
-        legalMove = null;
-      }
-
-      if (legalMove == null) {
-        // لا نحذف السهم الرئيسي، لكن لا نكمل PV بعد
-        // أول نقلة غير قابلة للتحويل.
+      if (legal == null) {
         if (sans.isEmpty) {
           sans.add(uci);
         }
         break;
       }
 
-      // ------------------------------------------------------
-      // الحصول على SAN قبل تنفيذ النقلة.
-      // move_to_san هو التحويل الصحيح في chess 0.8.1.
-      // ------------------------------------------------------
+      final san = (legal['san'] ?? uci).toString();
 
-      String san = uci;
-      try {
-        san = chess.move_to_san(legalMove);
-      } catch (_) {}
-
-      // تنفيذ النقلة على نسخة التحليل.
       bool moved = false;
       try {
-        moved = chess.move(legalMove);
+        final args = <String, dynamic>{
+          'from': from,
+          'to': to,
+        };
+        if (promotion != null) {
+          args['promotion'] = promotion;
+        }
+        final result = chess.move(args);
+        moved = result != null && result != false;
       } catch (_) {
         moved = false;
       }

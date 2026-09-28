@@ -873,6 +873,80 @@ class GameState extends ChangeNotifier {
   // Legal targets
   // ==========================================================
 
+  // ==========================================================
+  // مساعدات قراءة النقلات من حزمة chess (Map أو Move)
+  // ==========================================================
+
+  static String? _readSquare(dynamic item, String key) {
+    try {
+      if (item is Map) {
+        final v = item[key];
+        return v?.toString();
+      }
+    } catch (_) {}
+
+    try {
+      final d = item as dynamic;
+      return key == 'from'
+          ? d.fromAlgebraic as String
+          : d.toAlgebraic as String;
+    } catch (_) {}
+
+    return null;
+  }
+
+  static String? _moveTo(dynamic item) => _readSquare(item, 'to');
+
+  /// يبحث عن النقلة القانونية المطابقة لـ from/to/promotion
+  /// ويعيدها كـ Map (تحتوي على san) أو null.
+  static Map<String, dynamic>? findLegalMove(
+    ch.Chess game,
+    String from,
+    String to,
+    String? promotion,
+  ) {
+    try {
+      final moves = game.moves(<String, dynamic>{'verbose': true});
+
+      for (final item in moves) {
+        if (_readSquare(item, 'from') != from ||
+            _readSquare(item, 'to') != to) {
+          continue;
+        }
+
+        String? promo;
+        String san = '';
+
+        if (item is Map) {
+          promo = item['promotion']?.toString().toLowerCase();
+          san = (item['san'] ?? '').toString();
+        } else {
+          try {
+            promo = (item as dynamic).promotion?.toString().toLowerCase();
+          } catch (_) {}
+          try {
+            san = game.move_to_san(item);
+          } catch (_) {}
+        }
+
+        if (promotion != null &&
+            promo != null &&
+            promo.isNotEmpty &&
+            promo != promotion.toLowerCase()) {
+          continue;
+        }
+
+        return <String, dynamic>{
+          'from': from,
+          'to': to,
+          'san': san.isEmpty ? '$from$to' : san,
+        };
+      }
+    } catch (_) {}
+
+    return null;
+  }
+
   Set<String> legalTargets(
     String from,
   ) {
@@ -896,17 +970,13 @@ class GameState extends ChangeNotifier {
       final result =
           <String>{};
 
-      // ملاحظة: مع verbose=true، حزمة chess تعيد
-      // كائنات Move حقيقية (وليست Map كما في chess.js
-      // في جافاسكريبت). لذلك نستخدم toAlgebraic بدل
-      // قراءة item['to'] التي لا تعمل أبدًا مع هذه
-      // الحزمة (وهو ما كان يجعل قائمة النقلات
-      // القانونية فارغة دائمًا).
+      // مع verbose=true تعيد حزمة chess عناصر Map
+      // (from / to / san / promotion ...)، لكن قد تعيد
+      // كائنات Move في إصدارات أخرى، لذلك ندعم الحالتين.
       for (final item in raw) {
-        if (item is ch.Move) {
-          result.add(
-            item.toAlgebraic,
-          );
+        final sq = _moveTo(item);
+        if (sq != null) {
+          result.add(sq);
         }
       }
 
