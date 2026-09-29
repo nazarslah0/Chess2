@@ -6,6 +6,7 @@ import 'engine_service.dart';
 import 'board_widget.dart';
 import 'panels.dart';
 import 'sound_service.dart';
+import 'game_review_screen.dart';
 
 void main() {
   runApp(
@@ -738,6 +739,22 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text(
           'محلل وضعيات الشطرنج ♟️',
         ),
+        actions: [
+          IconButton(
+            tooltip: 'تحليل مباريات Chess.com',
+            icon: const Icon(
+              Icons.travel_explore_rounded,
+            ),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) =>
+                      const GameReviewScreen(),
+                ),
+              );
+            },
+          ),
+        ],
       ),
 
       body: SafeArea(

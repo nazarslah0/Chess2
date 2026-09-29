@@ -5,6 +5,18 @@ import 'package:flutter/material.dart';
 import 'models.dart';
 import 'piece_painter.dart';
 
+class BoardArrow {
+  final String from;
+  final String to;
+  final Color color;
+
+  const BoardArrow({
+    required this.from,
+    required this.to,
+    this.color = Colors.blueAccent,
+  });
+}
+
 class BoardWidget extends StatelessWidget {
   final GameState state;
   final BoardTheme boardTheme;
@@ -12,6 +24,11 @@ class BoardWidget extends StatelessWidget {
 
   final String? arrowFrom;
   final String? arrowTo;
+
+  /// أسهم إضافية (تُستخدم في مراجعة المباريات لعرض النقلة
+  /// المُلعَبة وأفضل نقلة بألوان مختلفة في آنٍ واحد).
+  /// إن كانت غير فارغة تُرسم بدل arrowFrom/arrowTo.
+  final List<BoardArrow> arrows;
 
   final Set<String> targets;
 
@@ -25,6 +42,7 @@ class BoardWidget extends StatelessWidget {
     required this.onTap,
     this.arrowFrom,
     this.arrowTo,
+    this.arrows = const [],
     this.targets = const {},
   });
 
@@ -42,6 +60,19 @@ class BoardWidget extends StatelessWidget {
     final board = GameState.parseBoard(boardFen);
 
     final flipped = state.flipped;
+
+    final effectiveArrows = arrows.isNotEmpty
+        ? arrows
+        : (_validSquare(arrowFrom) &&
+                _validSquare(arrowTo) &&
+                arrowFrom != arrowTo)
+            ? [
+                BoardArrow(
+                  from: arrowFrom!,
+                  to: arrowTo!,
+                ),
+              ]
+            : const <BoardArrow>[];
 
     final turn =
         fenParts.length > 1 ? fenParts[1] : 'w';
@@ -316,25 +347,25 @@ class BoardWidget extends StatelessWidget {
                   ),
 
                   // ==================================================
-                  // سهم أفضل نقلة
+                  // الأسهم (أفضل نقلة / النقلة المُلعَبة...)
                   // ==================================================
 
-                  if (_validSquare(arrowFrom) &&
-                      _validSquare(arrowTo) &&
-                      arrowFrom != arrowTo)
-                    Positioned.fill(
-                      child: IgnorePointer(
-                        child: CustomPaint(
-                          painter: _ArrowPainter(
-                            from: arrowFrom!,
-                            to: arrowTo!,
-                            flipped: flipped,
-                            color:
-                                Colors.blueAccent,
+                  for (final arrow in effectiveArrows)
+                    if (_validSquare(arrow.from) &&
+                        _validSquare(arrow.to) &&
+                        arrow.from != arrow.to)
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: CustomPaint(
+                            painter: _ArrowPainter(
+                              from: arrow.from,
+                              to: arrow.to,
+                              flipped: flipped,
+                              color: arrow.color,
+                            ),
                           ),
                         ),
                       ),
-                    ),
                 ],
               ),
               ),
