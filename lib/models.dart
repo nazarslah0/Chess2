@@ -431,6 +431,14 @@ class GameState extends ChangeNotifier {
   // ==========================================================
 
   bool enterPlayModeFromSetup() {
+    // إذا كنا في وضع اللعب أصلًا (لم يدخل المستخدم وضع الإعداد
+    // بعد)، فإن setupBoard تكون فارغة، وبناء FEN منها كان يمسح
+    // الرقعة بالكامل عند الضغط على "وضع اللعب". لا شيء لفعله
+    // هنا في هذه الحالة.
+    if (mode != 'setup') {
+      return true;
+    }
+
     _sanitizeSetupRights();
 
     final fen =
@@ -986,6 +994,10 @@ class GameState extends ChangeNotifier {
     }
   }
 
+  /// يُستدعى بعد كل نقلة ناجحة لتشغيل صوت مناسب.
+  /// القيمة: 'move' أو 'capture' أو 'checkmate'.
+  void Function(String kind)? onSound;
+
   // ==========================================================
   // Make move
   // ==========================================================
@@ -1014,6 +1026,34 @@ class GameState extends ChangeNotifier {
       args['promotion'] =
           promotion;
     }
+
+    // نحدد إن كانت النقلة أكلًا *قبل* تنفيذها (بما في ذلك
+    // الأخذ في المرور en passant) لأن اللوحة تتغيّر بعد move().
+    bool isCapture = false;
+
+    try {
+      final boardBefore =
+          parseBoard(
+        chess.fen
+            .split(' ')
+            .first,
+      );
+
+      if (boardBefore[to] != null) {
+        isCapture = true;
+      } else {
+        final moving =
+            boardBefore[from];
+
+        if (moving != null &&
+            moving.length == 2 &&
+            moving[1] == 'P' &&
+            from[0] != to[0]) {
+          // بيدق يتحرك قطريًا إلى مربع فارغ = أخذ بالمرور.
+          isCapture = true;
+        }
+      }
+    } catch (_) {}
 
     // نحفظ لون اللاعب الذي ينقل *قبل* تنفيذ النقلة،
     // لأن chess.turn يتغير فور نجاح move().
@@ -1068,6 +1108,25 @@ class GameState extends ChangeNotifier {
       selectedSquare = null;
 
       _validate();
+
+      // ------------------------------------------------------
+      // تشغيل الصوت المناسب.
+      // ------------------------------------------------------
+
+      bool isCheckmateNow = false;
+
+      try {
+        isCheckmateNow =
+            chess.in_checkmate;
+      } catch (_) {}
+
+      if (isCheckmateNow) {
+        onSound?.call('checkmate');
+      } else if (isCapture) {
+        onSound?.call('capture');
+      } else {
+        onSound?.call('move');
+      }
 
       notifyListeners();
 

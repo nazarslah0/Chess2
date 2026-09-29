@@ -5,6 +5,7 @@ import 'models.dart';
 import 'engine_service.dart';
 import 'board_widget.dart';
 import 'panels.dart';
+import 'sound_service.dart';
 
 void main() {
   runApp(
@@ -64,6 +65,9 @@ class _HomeScreenState extends State<HomeScreen> {
   final EngineService engine =
       EngineService();
 
+  final SoundService soundService =
+      SoundService();
+
   int boardThemeIdx = 0;
   int pieceThemeIdx = 0;
 
@@ -102,6 +106,12 @@ class _HomeScreenState extends State<HomeScreen> {
     state.addListener(
       _onStateChanged,
     );
+
+    state.onSound = (
+      String kind,
+    ) {
+      soundService.playKind(kind);
+    };
 
     engine.onStatus = (
       String status,
@@ -250,6 +260,8 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     engine.dispose();
+
+    soundService.dispose();
 
     fenController.dispose();
 

@@ -66,6 +66,26 @@ class BoardWidget extends StatelessWidget {
       return board[square] == '${turn}K';
     }
 
+    bool isKingCheckmated(String square) {
+      if (state.mode != 'play') {
+        return false;
+      }
+
+      bool mated = false;
+
+      try {
+        mated = state.chess.in_checkmate == true;
+      } catch (_) {
+        mated = false;
+      }
+
+      if (!mated) {
+        return false;
+      }
+
+      return board[square] == '${turn}K';
+    }
+
     return AspectRatio(
       aspectRatio: 1,
       child: LayoutBuilder(
@@ -159,6 +179,9 @@ class BoardWidget extends StatelessWidget {
                           final isCheck =
                               isKingInCheck(square);
 
+                          final isMated =
+                              isKingCheckmated(square);
+
                           return GestureDetector(
                             behavior:
                                 HitTestBehavior.opaque,
@@ -190,7 +213,7 @@ class BoardWidget extends StatelessWidget {
                                     ),
 
                                   // الملك في كش
-                                  if (isCheck)
+                                  if (isCheck && !isMated)
                                     Positioned.fill(
                                       child: Container(
                                         decoration:
@@ -203,6 +226,12 @@ class BoardWidget extends StatelessWidget {
                                           ),
                                         ),
                                       ),
+                                    ),
+
+                                  // الملك في كش مات — توهج نابض
+                                  if (isMated)
+                                    const Positioned.fill(
+                                      child: _CheckmateGlow(),
                                     ),
 
                                   // القطعة
@@ -577,5 +606,76 @@ class _ArrowPainter extends CustomPainter {
         oldDelegate.to != to ||
         oldDelegate.flipped != flipped ||
         oldDelegate.color != color;
+  }
+}
+
+
+// ============================================================
+// توهج نابض على مربع الملك عند الكش مات
+// ============================================================
+
+class _CheckmateGlow extends StatefulWidget {
+  const _CheckmateGlow();
+
+  @override
+  State<_CheckmateGlow> createState() =>
+      _CheckmateGlowState();
+}
+
+class _CheckmateGlowState extends State<_CheckmateGlow>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _pulse;
+
+  @override
+  void initState() {
+    super.initState();
+
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 650),
+    )..repeat(reverse: true);
+
+    _pulse = Tween<double>(
+      begin: 0.35,
+      end: 0.9,
+    ).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: Curves.easeInOut,
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _pulse,
+      builder: (context, _) {
+        return Container(
+          decoration: BoxDecoration(
+            border: Border.all(
+              color: Colors.red
+                  .withOpacity(_pulse.value),
+              width: 3,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.red
+                    .withOpacity(_pulse.value * 0.75),
+                blurRadius: 14,
+                spreadRadius: 2,
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 }
