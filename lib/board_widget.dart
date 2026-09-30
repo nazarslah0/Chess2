@@ -32,6 +32,8 @@ class BoardWidget extends StatelessWidget {
 
   final Set<String> targets;
 
+  final bool showCoordinates;
+
   final void Function(String square) onTap;
 
   const BoardWidget({
@@ -44,6 +46,7 @@ class BoardWidget extends StatelessWidget {
     this.arrowTo,
     this.arrows = const [],
     this.targets = const {},
+    this.showCoordinates = true,
   });
 
   static const String files = 'abcdefgh';
@@ -213,7 +216,21 @@ class BoardWidget extends StatelessWidget {
                           final isMated =
                               isKingCheckmated(square);
 
-                          return GestureDetector(
+                          return DragTarget<String>(
+                            onWillAcceptWithDetails:
+                                (details) =>
+                                    state.mode ==
+                                    'play',
+                            onAcceptWithDetails:
+                                (details) {
+                              onTap(square);
+                            },
+                            builder: (
+                              context,
+                              candidateData,
+                              rejectedData,
+                            ) {
+                              return GestureDetector(
                             behavior:
                                 HitTestBehavior.opaque,
                             onTap: () =>
@@ -272,9 +289,50 @@ class BoardWidget extends StatelessWidget {
                                         padding:
                                             const EdgeInsets
                                                 .all(3),
-                                        child: _buildPiece(
-                                          piece,
-                                        ),
+                                        child: state
+                                                    .mode ==
+                                                'play'
+                                            ? Draggable<
+                                                String>(
+                                                data:
+                                                    square,
+                                                feedback:
+                                                    SizedBox(
+                                                  width:
+                                                      cell,
+                                                  height:
+                                                      cell,
+                                                  child: Opacity(
+                                                    opacity:
+                                                        0.85,
+                                                    child:
+                                                        _buildPiece(
+                                                      piece,
+                                                    ),
+                                                  ),
+                                                ),
+                                                childWhenDragging:
+                                                    Opacity(
+                                                  opacity:
+                                                      0.25,
+                                                  child:
+                                                      _buildPiece(
+                                                    piece,
+                                                  ),
+                                                ),
+                                                onDragStarted:
+                                                    () =>
+                                                        onTap(
+                                                  square,
+                                                ),
+                                                child:
+                                                    _buildPiece(
+                                                  piece,
+                                                ),
+                                              )
+                                            : _buildPiece(
+                                                piece,
+                                              ),
                                       ),
                                     ),
 
@@ -297,7 +355,8 @@ class BoardWidget extends StatelessWidget {
                                     ),
 
                                   // أرقام الصفوف
-                                  if (col == 0)
+                                  if (col == 0 &&
+                                      showCoordinates)
                                     Positioned(
                                       top: 2,
                                       left: 3,
@@ -318,7 +377,8 @@ class BoardWidget extends StatelessWidget {
                                     ),
 
                                   // أسماء الأعمدة
-                                  if (row == 7)
+                                  if (row == 7 &&
+                                      showCoordinates)
                                     Positioned(
                                       bottom: 1,
                                       right: 3,
@@ -340,6 +400,8 @@ class BoardWidget extends StatelessWidget {
                                 ],
                               ),
                             ),
+                              );
+                            },
                           );
                         },
                       ),

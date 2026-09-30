@@ -139,6 +139,39 @@ String? _extractHeader(String pgn, String key) {
   return match?.group(1);
 }
 
+/// يستخرج كل رؤوس PGN القياسية (اللاعبان، النتيجة، التاريخ،
+/// الحدث، الموقع...) كخريطة نصية. مفيد عند لصق PGN يدويًا
+/// (وليس قادمًا من Chess.com/Lichess حيث تتوفر هذه البيانات
+/// أصلًا كحقول JSON منفصلة).
+Map<String, String> extractPgnHeaders(String pgn) {
+  final headers = <String, String>{};
+
+  const keys = [
+    'Event',
+    'Site',
+    'Date',
+    'Round',
+    'White',
+    'Black',
+    'Result',
+    'WhiteElo',
+    'BlackElo',
+    'TimeControl',
+    'ECO',
+    'Opening',
+  ];
+
+  for (final key in keys) {
+    final v = _extractHeader(pgn, key);
+
+    if (v != null && v.trim().isNotEmpty) {
+      headers[key] = v.trim();
+    }
+  }
+
+  return headers;
+}
+
 /// يفكك مباراة PGN كاملة إلى قائمة نقلات مع FEN قبل/بعد كل
 /// نقلة، بإعادة تشغيلها على رقعة حقيقية بدل الاعتماد على
 /// نص PGN وحده (لضمان صحة from/to/SAN حتى مع اختلافات

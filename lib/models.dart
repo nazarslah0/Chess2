@@ -1110,18 +1110,46 @@ class GameState extends ChangeNotifier {
       _validate();
 
       // ------------------------------------------------------
-      // تشغيل الصوت المناسب.
+      // تشغيل الصوت المناسب (بالأولوية: كش مات/نهاية اللعبة
+      // > ترقية > تبييت > كش > أكل > حركة عادية).
       // ------------------------------------------------------
 
       bool isCheckmateNow = false;
+      bool isDrawNow = false;
+      bool isCheckNow = false;
 
       try {
-        isCheckmateNow =
-            chess.in_checkmate;
+        isCheckmateNow = chess.in_checkmate;
       } catch (_) {}
+
+      try {
+        isDrawNow = chess.in_stalemate;
+      } catch (_) {}
+
+      if (!isDrawNow) {
+        try {
+          isDrawNow = chess.in_draw;
+        } catch (_) {}
+      }
+
+      try {
+        isCheckNow =
+            !isCheckmateNow && chess.in_check;
+      } catch (_) {}
+
+      final isCastle =
+          san.startsWith('O-O');
 
       if (isCheckmateNow) {
         onSound?.call('checkmate');
+      } else if (isDrawNow) {
+        onSound?.call('game_over');
+      } else if (promotion != null) {
+        onSound?.call('promotion');
+      } else if (isCastle) {
+        onSound?.call('castle');
+      } else if (isCheckNow) {
+        onSound?.call('check');
       } else if (isCapture) {
         onSound?.call('capture');
       } else {

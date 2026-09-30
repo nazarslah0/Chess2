@@ -6,7 +6,7 @@ import 'engine_service.dart';
 import 'board_widget.dart';
 import 'panels.dart';
 import 'sound_service.dart';
-import 'game_review_screen.dart';
+import 'home_screen.dart';
 
 void main() {
   runApp(
@@ -33,10 +33,20 @@ class ChessAnalyzerApp extends StatelessWidget {
         colorSchemeSeed: Colors.indigo,
         useMaterial3: true,
       ),
-      home: const Directionality(
-        textDirection: TextDirection.rtl,
-        child: HomeScreen(),
+      darkTheme: ThemeData(
+        colorSchemeSeed: Colors.indigo,
+        useMaterial3: true,
+        brightness: Brightness.dark,
       ),
+      themeMode: ThemeMode.system,
+      // نطبّق RTL على كل الشاشات (بما فيها الشاشات التي
+      // تُفتح لاحقًا عبر Navigator.push)، بدل تغليف الشاشة
+      // الأولى فقط.
+      builder: (context, child) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: child ?? const SizedBox.shrink(),
+      ),
+      home: const HomeScreen(),
     );
   }
 }
@@ -45,17 +55,17 @@ class ChessAnalyzerApp extends StatelessWidget {
 /// Home Screen
 /// ============================================================
 
-class HomeScreen extends StatefulWidget {
-  const HomeScreen({
+class PositionAnalyzerScreen extends StatefulWidget {
+  const PositionAnalyzerScreen({
     super.key,
   });
 
   @override
-  State<HomeScreen> createState() =>
-      _HomeScreenState();
+  State<PositionAnalyzerScreen> createState() =>
+      _PositionAnalyzerScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
   // ==========================================================
   // State
   // ==========================================================
@@ -737,24 +747,8 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'محلل وضعيات الشطرنج ♟️',
+          'تحليل وضعية ♟️',
         ),
-        actions: [
-          IconButton(
-            tooltip: 'تحليل مباريات Chess.com',
-            icon: const Icon(
-              Icons.travel_explore_rounded,
-            ),
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) =>
-                      const GameReviewScreen(),
-                ),
-              );
-            },
-          ),
-        ],
       ),
 
       body: SafeArea(

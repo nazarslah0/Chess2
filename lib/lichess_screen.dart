@@ -1,32 +1,30 @@
 import 'package:flutter/material.dart';
 
-import 'chesscom_service.dart';
+import 'lichess_service.dart';
 import 'game_analysis_screen.dart';
 
-/// شاشة البحث عن مباريات Chess.com وعرضها كقائمة — التحليل
-/// نفسه يتم بالكامل داخل GameAnalysisScreen (مصدر واحد
-/// للتحليل يُستخدم أيضًا من Lichess ومن PGN المُلصَق يدويًا).
-class GameReviewScreen extends StatefulWidget {
-  const GameReviewScreen({super.key});
+/// شاشة البحث عن مباريات Lichess — نفس بنية شاشة Chess.com،
+/// وتفتح نفس GameAnalysisScreen الموحّدة عند اختيار مباراة.
+class LichessScreen extends StatefulWidget {
+  const LichessScreen({super.key});
 
   @override
-  State<GameReviewScreen> createState() =>
-      _GameReviewScreenState();
+  State<LichessScreen> createState() =>
+      _LichessScreenState();
 }
 
 enum _GameLimit { last10, last25, last50 }
 
-class _GameReviewScreenState
-    extends State<GameReviewScreen> {
+class _LichessScreenState extends State<LichessScreen> {
   final TextEditingController _usernameCtrl =
       TextEditingController();
 
-  final ChessComService _service = ChessComService();
+  final LichessService _service = LichessService();
 
   bool _loadingGames = false;
   String? _error;
 
-  List<ChessComGame> _games = <ChessComGame>[];
+  List<LichessGame> _games = <LichessGame>[];
   String _username = '';
 
   _GameLimit _limit = _GameLimit.last10;
@@ -48,10 +46,6 @@ class _GameReviewScreenState
     }
   }
 
-  // ============================================================
-  // جلب المباريات
-  // ============================================================
-
   Future<void> _search() async {
     final u = _usernameCtrl.text.trim();
 
@@ -62,7 +56,7 @@ class _GameReviewScreenState
     setState(() {
       _loadingGames = true;
       _error = null;
-      _games = <ChessComGame>[];
+      _games = <LichessGame>[];
     });
 
     try {
@@ -89,42 +83,34 @@ class _GameReviewScreenState
       if (!mounted) return;
 
       setState(() {
-        _error = e is ChessComException
+        _error = e is LichessException
             ? e.message
-            : 'حدث خطأ غير متوقع أثناء الاتصال بـ Chess.com.';
+            : 'حدث خطأ غير متوقع أثناء الاتصال بـ Lichess.';
 
         _loadingGames = false;
       });
     }
   }
 
-  void _openGame(ChessComGame g) {
-    final opponent = g.opponentOf(_username);
-
-    final isWhite = g.whiteUsername.toLowerCase() ==
-        _username.toLowerCase();
-
+  void _openGame(LichessGame g) {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => GameAnalysisScreen(
           pgn: g.pgn,
-          whiteLabel: isWhite ? _username : opponent,
-          blackLabel: isWhite ? opponent : _username,
-          sourceLabel: 'Chess.com',
+          whiteLabel: g.whiteUsername,
+          blackLabel: g.blackUsername,
+          resultLabel: g.result,
+          sourceLabel: 'Lichess',
         ),
       ),
     );
   }
 
-  // ============================================================
-  // Build
-  // ============================================================
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('تحليل مباريات Chess.com'),
+        title: const Text('تحليل مباريات Lichess'),
       ),
       body: SafeArea(
         child: Padding(
@@ -143,8 +129,8 @@ class _GameReviewScreenState
                       decoration:
                           const InputDecoration(
                         labelText:
-                            'معرف Chess.com (Username)',
-                        hintText: 'مثال: hikaru',
+                            'معرف Lichess (Username)',
+                        hintText: 'مثال: DrNykterstein',
                         border: OutlineInputBorder(),
                         prefixIcon: Icon(
                           Icons.person_outline,
@@ -217,7 +203,7 @@ class _GameReviewScreenState
                         child: Text(
                           _loadingGames
                               ? 'جاري التحميل...'
-                              : 'أدخل معرف Chess.com'
+                              : 'أدخل معرف Lichess'
                                   ' لعرض آخر مبارياته'
                                   ' وتحليلها بأسهم'
                                   ' وتصنيف للنقلات.',
@@ -247,7 +233,7 @@ class _GameReviewScreenState
     );
   }
 
-  Widget _buildGameTile(ChessComGame g) {
+  Widget _buildGameTile(LichessGame g) {
     final outcome = g.outcomeFor(_username);
     final opponent = g.opponentOf(_username);
 
@@ -284,7 +270,9 @@ class _GameReviewScreenState
         child: Icon(icon, color: color),
       ),
       title: Text('ضد $opponent'),
-      subtitle: Text('${g.timeClass} • $dateStr'),
+      subtitle: Text(
+        '${g.timeClass.isEmpty ? '' : '${g.timeClass} • '}$dateStr',
+      ),
       trailing: Text(
         label,
         style: TextStyle(

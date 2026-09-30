@@ -54,6 +54,7 @@ class EngineService {
 
   int _requestedDepth = 18;
   int _requestedMultiPv = 3;
+  int? _requestedMovetimeMs;
 
   Completer<void>? _readyCompleter;
 
@@ -516,6 +517,7 @@ class EngineService {
     String fen, {
     required int depth,
     required int multiPv,
+    int? movetimeMs,
   }) async {
     final cleanFen = fen.trim();
 
@@ -557,6 +559,11 @@ class EngineService {
 
     _requestedMultiPv =
         multiPv.clamp(1, 10);
+
+    _requestedMovetimeMs =
+        (movetimeMs != null && movetimeMs > 0)
+            ? movetimeMs
+            : null;
 
     _analyzedFen =
         cleanFen;
@@ -606,9 +613,18 @@ class EngineService {
       'position fen $_analyzedFen',
     );
 
-    await _send(
-      'go depth $_requestedDepth',
-    );
+    // إن طُلب حد زمني (movetime) نستخدمه بدل العمق الثابت؛
+    // هذا مفيد لتحليل مباراة كاملة بسرعة متوقعة بدل الاعتماد
+    // على عمق قد يستغرق وقتًا متفاوتًا حسب تعقيد الوضعية.
+    if (_requestedMovetimeMs != null) {
+      await _send(
+        'go movetime $_requestedMovetimeMs',
+      );
+    } else {
+      await _send(
+        'go depth $_requestedDepth',
+      );
+    }
   }
 
   // ============================================================

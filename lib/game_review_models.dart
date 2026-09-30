@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 /// (الخوارزمية الدقيقة لدى chess.com غير منشورة، هذا تقريب
 /// عملي معتمد على فارق التقييم بوحدة القرن — centipawn loss).
 enum MoveQuality {
+  brilliant,
   best,
   excellent,
   good,
@@ -28,6 +29,11 @@ class MoveQualityInfo {
 }
 
 const Map<MoveQuality, MoveQualityInfo> moveQualityInfo = {
+  MoveQuality.brilliant: MoveQualityInfo(
+    label: 'رائعة!!',
+    color: Color(0xFF1BADA6),
+    icon: Icons.auto_awesome_rounded,
+  ),
   MoveQuality.best: MoveQualityInfo(
     label: 'الأفضل',
     color: Color(0xFF2AA876),
@@ -170,4 +176,51 @@ double moveAccuracy({
           3.1669;
 
   return raw.clamp(0, 100);
+}
+
+// ================================================================
+// كشف تقريبي لنقلات "رائعة!!" (Brilliant)
+// ================================================================
+//
+// هذه ليست خوارزمية chess.com الرسمية (غير منشورة)، بل تقريب
+// شائع لنفس الفكرة: النقلة هي أفضل نقلة حسب المحرك، وتبدو
+// وكأنها تضحي بقطعة (الخصم يستطيع أكلها في الحال بربح مادي
+// ظاهري)، لكن المحرك يؤكد أنها لا تزال الأفضل رغم ذلك — وأن
+// الوضعية لم تكن فائزة أصلًا بشكل ساحق قبل النقلة.
+const Map<String, int> pieceValues = {
+  'P': 1,
+  'N': 3,
+  'B': 3,
+  'R': 5,
+  'Q': 9,
+  'K': 0,
+};
+
+/// يقرر هل نرفع تصنيف نقلة (أُثبتت أصلًا كأفضل نقلة) إلى
+/// "رائعة!!" بناءً على وجود تضحية حقيقية وظروف مناسبة.
+bool isBrilliantCandidate({
+  required MoveQuality baseQuality,
+  required bool isSacrifice,
+  required int cpBeforeMover,
+  required bool onlyLegalMove,
+  required String movingPieceType, // 'P','N','B','R','Q','K'
+}) {
+  if (baseQuality != MoveQuality.best) {
+    return false;
+  }
+
+  if (onlyLegalMove) {
+    return false;
+  }
+
+  if (movingPieceType == 'P' ||
+      movingPieceType == 'K') {
+    return false;
+  }
+
+  if (cpBeforeMover.abs() >= 600) {
+    return false;
+  }
+
+  return isSacrifice;
 }
