@@ -116,6 +116,20 @@ jobs:
               ''
           )
 
+          # ميزة تحليل مباريات Chess.com تحتاج اتصال إنترنت.
+          # منح إذن INTERNET في المانيفست الرئيسي (وليس فقط
+          # manifest التصحيح الذي يضيفه flutter create تلقائيًا
+          # فقط لبنية debug) لأن flutter build apk هنا ينتج
+          # إصدار release.
+          if 'android.permission.INTERNET' not in text:
+              text = text.replace(
+                  '</manifest>',
+                  '    <uses-permission '
+                  'android:name='
+                  '"android.permission.INTERNET" />\n'
+                  '</manifest>',
+              )
+
           manifest.write_text(text)
 
           print("AndroidManifest.xml fixed.")
