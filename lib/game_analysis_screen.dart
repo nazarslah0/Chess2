@@ -58,8 +58,9 @@ class _GameAnalysisScreenState
 
   bool _analyzing = false;
   double _progress = 0;
-
-  final double _depth = 14;
+  String _analysisStage = 'تهيئة';
+  int _analysisDone = 0;
+  int _analysisTotal = 0;
 
   int _requestToken = 0;
 
@@ -96,8 +97,6 @@ class _GameAnalysisScreenState
 
     _boardState.loadFen(_fens.first);
 
-    _engine.init();
-
     _analyzing = true;
 
     final myToken = ++_requestToken;
@@ -125,136 +124,282 @@ class _GameAnalysisScreenState
       widget.resultLabel ?? _headers['Result'] ?? '';
 
   // ============================================================
-  // التحليل الكامل للمباراة
+  // التحليل السريع + التحليل العميق للمرشحين
   // ============================================================
 
-  Future<_Eval> _evaluatePosition(String fen) {
-    final completer = Completer<_Eval>();
+  String _normalizeUci(String value) {
+    final v = value.trim().toLowerCase();
+    if (v.length < 4) return '';
+    final promotion = v.length > 4 ? v.substring(4, 5) : '';
+    return '${v.substring(0, 4)}$promotion';
+  }
 
-    double lastPawns = 0;
-    String lastLabel = '0.00';
-    List<String> lastPv = const <String>[];
+  String _playedUci(PgnPly ply) {
+    final promotion =
+        ply.promotion?.trim().toLowerCase() ?? '';
+    return '${ply.from.toLowerCase()}'
+        '${ply.to.toLowerCase()}'
+        '$promotion';
+  }
 
-    _engine.onInfo = (multipv, line) {
-      if (multipv == 1) {
-        lastPawns = line.evalPawns;
-        lastLabel = line.evalLabel;
-        lastPv = line.uciMoves;
-      }
-    };
+  bool _uciMatchesPlayed(
+    String bestUci,
+    PgnPly ply,
+  ) {
+    final best = _normalizeUci(bestUci);
+    final played = _normalizeUci(_playedUci(ply));
 
-    _engine.onBestMove = (uci) {
-      if (!completer.isCompleted) {
-        completer.complete(
-          _Eval(lastPawns, lastLabel, uci, lastPv),
-        );
-      }
-    };
+    return best.isNotEmpty &&
+        played.isNotEmpty &&
+        best == played;
+  }
 
-    _engine.analyze(
-      fen,
-      depth: _depth.round(),
-      multiPv: 1,
+  bool _looksLikeDeepCandidate(
+    int i,
+    List<EnginePositionResult> fast,
+  ) {
+    if (i < 0 || i >= _plies.length) return false;
+
+    final p = _plies[i];
+
+    final before = cpFromWhitePerspective(
+      fast[i].evalPawns,
+      fast[i].evalLabel,
     );
 
-    return completer.future.timeout(
-      const Duration(seconds: 30),
-      onTimeout: () =>
-          _Eval(lastPawns, lastLabel, '', lastPv),
+    final after = cpFromWhitePerspective(
+      fast[i + 1].evalPawns,
+      fast[i + 1].evalLabel,
     );
+
+    final sign = p.color == 'w' ? 1 : -1;
+    final loss = (before * sign) - (after * sign);
+
+    // المرشحون الرئيسيون للتحليل العميق:
+    // 1) فقد كبير في التقييم.
+    // 2) النقلة ليست أفضل نقلة للمحرك.
+    // 3) تغير حاد في التقييم.
+    // 4) نقلات أخذ/تضحية قد تكون Brilliant.
+    final bestMatches =
+        _uciMatchesPlayed(fast[i].bestUci, p);
+
+    if (loss.abs() >= 60) return true;
+    if (!bestMatches && loss >= 30) return true;
+    if (loss.abs() >= 90) return true;
+
+    final piece =
+        GameState.parseBoard(
+          p.fenBefore.split(' ').first,
+        )[p.from];
+
+    if (piece != null &&
+        piece.length == 2 &&
+        piece[1] != 'P' &&
+        piece[1] != 'K' &&
+        p.isCapture) {
+      return true;
+    }
+
+    return false;
   }
 
   Future<void> _runAnalysis(int token) async {
-    if (!_engine.ready) {
+    try {
       await _engine.init();
 
-      var waited = 0;
-      while (!_engine.ready && waited < 8000) {
-        await Future.delayed(
-          const Duration(milliseconds: 200),
-        );
-        waited += 200;
-      }
-    }
+      _analysisStage = 'التحليل السريع';
+      _analysisDone = 0;
+      _progress = 0;
 
-    for (var i = 0; i < _fens.length; i++) {
-      if (!mounted || token != _requestToken) {
-        return;
+      if (mounted) {
+        setState(() {});
       }
 
-      final r = await _evaluatePosition(_fens[i]);
+      // ----------------------------------------------------------
+      // Pass 1: تحليل سريع متوازي على عدة أنوية.
+      // ----------------------------------------------------------
+      final workerCount =
+          _engine.recommendedWorkerCount;
 
-      if (!mounted || token != _requestToken) {
-        return;
+      final fastResults =
+          await _engine.analyzePositionsParallel(
+        _fens,
+        workerCount: workerCount,
+        depth: 11,
+        movetimeMs: 110,
+        onProgress: (done, total) {
+          if (!mounted || token != _requestToken) return;
+
+          setState(() {
+            _analysisDone = done;
+            _analysisTotal = total;
+            _progress =
+                total == 0 ? 0 : (done / total) * 0.70;
+          });
+        },
+      );
+
+      if (!mounted || token != _requestToken) return;
+
+      for (var i = 0; i < fastResults.length; i++) {
+        _evalPawns[i] = fastResults[i].evalPawns;
+        _evalLabels[i] = fastResults[i].evalLabel;
+        _bestUci[i] = fastResults[i].bestUci;
+        _pvUci[i] = fastResults[i].pv;
       }
 
-      _evalPawns[i] = r.pawns;
-      _evalLabels[i] = r.label;
-      _bestUci[i] = r.bestUci;
-      _pvUci[i] = r.pv;
+      // ----------------------------------------------------------
+      // اكتشاف المرشحين قبل التحليل العميق.
+      // نعيد فحص الوضعيات المهمة فقط، بدل رفع العمق للمباراة
+      // كلها.
+      // ----------------------------------------------------------
+      final candidatePositions = <int>{};
 
-      setState(() {
-        _progress = (i + 1) / _fens.length;
-      });
-    }
-
-    final qualities = <MoveQuality>[];
-
-    for (var i = 0; i < _plies.length; i++) {
-      final p = _plies[i];
-
-      final cpBefore = cpFromWhitePerspective(
-        _evalPawns[i],
-        _evalLabels[i],
-      );
-
-      final cpAfter = cpFromWhitePerspective(
-        _evalPawns[i + 1],
-        _evalLabels[i + 1],
-      );
-
-      final bestUci = _bestUci[i];
-      final playedUci = '${p.from}${p.to}';
-
-      final wasBest = bestUci.isNotEmpty &&
-          bestUci.startsWith(playedUci);
-
-      var quality = classifyMove(
-        cpBeforeWhite: cpBefore,
-        cpAfterWhite: cpAfter,
-        color: p.color,
-        wasBestMove: wasBest,
-      );
-
-      if (quality == MoveQuality.best) {
-        final sign = p.color == 'w' ? 1 : -1;
-        final cpBeforeMover = cpBefore * sign;
-
-        final upgraded = _tryUpgradeToBrilliant(
-          ply: p,
-          baseQuality: quality,
-          cpBeforeMover: cpBeforeMover,
-        );
-
-        if (upgraded != null) {
-          quality = upgraded;
+      for (var i = 0; i < _plies.length; i++) {
+        if (_looksLikeDeepCandidate(i, fastResults)) {
+          candidatePositions.add(i);
+          candidatePositions.add(i + 1);
         }
       }
 
-      qualities.add(quality);
+      // دائمًا نضمن فحص أول وآخر وضعية.
+      candidatePositions.add(0);
+      candidatePositions.add(_fens.length - 1);
+
+      final sortedCandidates =
+          candidatePositions
+              .where((i) => i >= 0 && i < _fens.length)
+              .toList()
+            ..sort();
+
+      // ----------------------------------------------------------
+      // Pass 2: تحليل عميق للمرشحين فقط.
+      // ----------------------------------------------------------
+      if (sortedCandidates.isNotEmpty) {
+        _analysisStage = 'التحليل العميق للنقلات المهمة';
+        _analysisDone = 0;
+        _analysisTotal = sortedCandidates.length;
+
+        if (mounted) {
+          setState(() {});
+        }
+
+        final candidateFens = sortedCandidates
+            .map((i) => _fens[i])
+            .toList(growable: false);
+
+        final deepResults =
+            await _engine.analyzePositionsParallel(
+          candidateFens,
+          workerCount: workerCount,
+          depth: 18,
+          movetimeMs: 320,
+          onProgress: (done, total) {
+            if (!mounted || token != _requestToken) return;
+
+            setState(() {
+              _analysisDone = done;
+              _analysisTotal = total;
+              _progress =
+                  0.70 +
+                  (total == 0
+                          ? 0
+                          : done / total) *
+                      0.30;
+            });
+          },
+        );
+
+        if (!mounted || token != _requestToken) return;
+
+        for (var j = 0;
+            j < sortedCandidates.length &&
+                j < deepResults.length;
+            j++) {
+          final index = sortedCandidates[j];
+          final result = deepResults[j];
+
+          _evalPawns[index] = result.evalPawns;
+          _evalLabels[index] = result.evalLabel;
+          _bestUci[index] = result.bestUci;
+          _pvUci[index] = result.pv;
+        }
+      }
+
+      // ----------------------------------------------------------
+      // التصنيف النهائي بعد انتهاء التحليل العميق.
+      // ----------------------------------------------------------
+      final qualities = <MoveQuality>[];
+
+      for (var i = 0; i < _plies.length; i++) {
+        final p = _plies[i];
+
+        final cpBefore = cpFromWhitePerspective(
+          _evalPawns[i],
+          _evalLabels[i],
+        );
+
+        final cpAfter = cpFromWhitePerspective(
+          _evalPawns[i + 1],
+          _evalLabels[i + 1],
+        );
+
+        final wasBest =
+            _uciMatchesPlayed(
+          _bestUci[i],
+          p,
+        );
+
+        var quality = classifyMove(
+          cpBeforeWhite: cpBefore,
+          cpAfterWhite: cpAfter,
+          color: p.color,
+          wasBestMove: wasBest,
+        );
+
+        if (quality == MoveQuality.best) {
+          final sign =
+              p.color == 'w' ? 1 : -1;
+
+          final cpBeforeMover =
+              cpBefore * sign;
+
+          final upgraded =
+              _tryUpgradeToBrilliant(
+            ply: p,
+            baseQuality: quality,
+            cpBeforeMover: cpBeforeMover,
+          );
+
+          if (upgraded != null) {
+            quality = upgraded;
+          }
+        }
+
+        qualities.add(quality);
+      }
+
+      if (!mounted || token != _requestToken) return;
+
+      setState(() {
+        _qualities = qualities;
+        _analyzing = false;
+        _analysisStage = 'اكتمل التحليل';
+        _progress = 1.0;
+        _currentIndex = 0;
+      });
+
+      // يبدأ المستخدم من الوضعية الابتدائية، مثل وضع المراجعة
+      // في تطبيقات تحليل المباريات الاحترافية.
+      _boardState.loadFen(_fens.first);
+    } catch (e) {
+      if (!mounted || token != _requestToken) return;
+
+      setState(() {
+        _analyzing = false;
+        _analysisStage = 'فشل التحليل';
+      });
     }
-
-    if (!mounted || token != _requestToken) {
-      return;
-    }
-
-    setState(() {
-      _qualities = qualities;
-      _analyzing = false;
-      _currentIndex = _fens.length - 1;
-    });
-
-    _boardState.loadFen(_fens.last);
   }
 
   // ============================================================
@@ -943,10 +1088,11 @@ class _GameAnalysisScreenState
                   vertical: 6,
                 ),
                 child: Text(
-                  'جارٍ تحليل المباراة... '
+                  '$_analysisStage... '
                   '${(_progress * 100).round()}%'
-                  ' ($_currentIndex/'
-                  '${_fens.isEmpty ? 0 : _fens.length - 1})',
+                  ' ($_analysisDone/'
+                  '$_analysisTotal) • '
+                  '${_engine.recommendedWorkerCount} أنوية',
                   style: Theme.of(context)
                       .textTheme
                       .bodySmall,
@@ -978,7 +1124,7 @@ class _GameAnalysisScreenState
     final hasEval = _evalPawns.isNotEmpty;
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.fromLTRB(6, 10, 6, 12),
       child: Column(
         children: [
           if (_resultText.isNotEmpty)
@@ -1005,7 +1151,7 @@ class _GameAnalysisScreenState
                     ? _evalLabels[_currentIndex]
                     : '0.00',
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 5),
               Expanded(
                 child: AspectRatio(
                   aspectRatio: 1,
@@ -1211,46 +1357,113 @@ class _GameAnalysisScreenState
     final atStart = _currentIndex <= 0;
     final atEnd = _currentIndex >= _fens.length - 1;
 
+    final scheme = Theme.of(context).colorScheme;
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        IconButton(
+        _navButton(
+          icon: Icons.skip_previous_rounded,
           tooltip: 'البداية',
-          onPressed:
-              atStart ? null : () => _goTo(0),
-          icon: const Icon(Icons.skip_previous),
+          enabled: !atStart,
+          onPressed: () => _goTo(0),
+          scheme: scheme,
         ),
-        IconButton(
+        const SizedBox(width: 6),
+        _navButton(
+          icon: Icons.navigate_before_rounded,
           tooltip: 'السابقة',
-          onPressed: atStart
-              ? null
-              : () => _goTo(_currentIndex - 1),
-          icon: const Icon(Icons.navigate_before),
+          enabled: !atStart,
+          onPressed: () => _goTo(_currentIndex - 1),
+          scheme: scheme,
+          primary: true,
         ),
-        Padding(
+        Container(
+          margin: const EdgeInsets.symmetric(
+            horizontal: 10,
+          ),
           padding: const EdgeInsets.symmetric(
-            horizontal: 12,
+            horizontal: 14,
+            vertical: 8,
+          ),
+          decoration: BoxDecoration(
+            color: scheme.primary.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(10),
           ),
           child: Text(
             '$_currentIndex / '
             '${_fens.isEmpty ? 0 : _fens.length - 1}',
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 15,
+            ),
           ),
         ),
-        IconButton(
+        _navButton(
+          icon: Icons.navigate_next_rounded,
           tooltip: 'التالية',
-          onPressed: atEnd
-              ? null
-              : () => _goTo(_currentIndex + 1),
-          icon: const Icon(Icons.navigate_next),
+          enabled: !atEnd,
+          onPressed: () => _goTo(_currentIndex + 1),
+          scheme: scheme,
+          primary: true,
         ),
-        IconButton(
+        const SizedBox(width: 6),
+        _navButton(
+          icon: Icons.skip_next_rounded,
           tooltip: 'النهاية',
-          onPressed: atEnd
-              ? null
-              : () => _goTo(_fens.length - 1),
-          icon: const Icon(Icons.skip_next),
+          enabled: !atEnd,
+          onPressed: () => _goTo(_fens.length - 1),
+          scheme: scheme,
         ),
       ],
+    );
+  }
+
+  /// زر تنقل دائري له خلفية واضحة دائمًا (حتى عند التعطيل)،
+  /// بدل IconButton العادي الذي يصبح شبه شفاف عند التعطيل
+  /// ويعطي انطباعًا بأن الزر "اختفى".
+  Widget _navButton({
+    required IconData icon,
+    required String tooltip,
+    required bool enabled,
+    required VoidCallback onPressed,
+    required ColorScheme scheme,
+    bool primary = false,
+  }) {
+    final size = primary ? 48.0 : 40.0;
+    final iconSize = primary ? 28.0 : 22.0;
+
+    final bgColor = !enabled
+        ? scheme.onSurface.withOpacity(0.06)
+        : primary
+            ? scheme.primary
+            : scheme.primary.withOpacity(0.12);
+
+    final iconColor = !enabled
+        ? scheme.onSurface.withOpacity(0.28)
+        : primary
+            ? scheme.onPrimary
+            : scheme.primary;
+
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: bgColor,
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: enabled ? onPressed : null,
+          child: SizedBox(
+            width: size,
+            height: size,
+            child: Icon(
+              icon,
+              size: iconSize,
+              color: iconColor,
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -2194,7 +2407,7 @@ class _EvalBar extends StatelessWidget {
         ((clamped + 8) / 16).clamp(0.0, 1.0);
 
     return SizedBox(
-      width: 30,
+      width: 22,
       child: Column(
         children: [
           Expanded(
@@ -2230,20 +2443,6 @@ class _EvalBar extends StatelessWidget {
 // ================================================================
 // نتيجة تقييم وضعية واحدة / لحظة حرجة
 // ================================================================
-
-class _Eval {
-  final double pawns;
-  final String label;
-  final String bestUci;
-  final List<String> pv;
-
-  const _Eval(
-    this.pawns,
-    this.label,
-    this.bestUci,
-    this.pv,
-  );
-}
 
 class _CriticalMoment {
   final int plyIndex;
