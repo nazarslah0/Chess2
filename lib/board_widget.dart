@@ -378,7 +378,7 @@ class BoardWidget extends StatelessWidget {
                                                   .bold,
                                           color: boardTheme
                                               .border
-                                              .withValues(alpha=
+                                              .withValues(alpha: 
                                                   0.75),
                                         ),
                                       ),
@@ -400,7 +400,7 @@ class BoardWidget extends StatelessWidget {
                                                   .bold,
                                           color: boardTheme
                                               .border
-                                              .withValues(alpha=
+                                              .withValues(alpha: 
                                                   0.75),
                                         ),
                                       ),
@@ -617,7 +617,7 @@ class _ArrowPainter extends CustomPainter {
 
     final shaftPaint = Paint()
       ..color =
-          color.withValues(alpha=0.82)
+          color.withValues(alpha: 0.82)
       ..strokeWidth =
           cell * 0.115
       ..strokeCap =
@@ -684,7 +684,7 @@ class _ArrowPainter extends CustomPainter {
 
     final headPaint = Paint()
       ..color =
-          color.withValues(alpha=0.92)
+          color.withValues(alpha: 0.92)
       ..style =
           PaintingStyle.fill;
 
@@ -758,13 +758,13 @@ class _CheckmateGlowState extends State<_CheckmateGlow>
           decoration: BoxDecoration(
             border: Border.all(
               color: Colors.red
-                  .withValues(alpha=_pulse.value),
+                  .withValues(alpha: _pulse.value),
               width: 3,
             ),
             boxShadow: [
               BoxShadow(
                 color: Colors.red
-                    .withValues(alpha=_pulse.value * 0.75),
+                    .withValues(alpha: _pulse.value * 0.75),
                 blurRadius: 14,
                 spreadRadius: 2,
               ),

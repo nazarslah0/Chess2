@@ -266,7 +266,7 @@ class _LichessScreenState extends State<LichessScreen> {
 
     return ListTile(
       leading: CircleAvatar(
-        backgroundColor: color.withValues(alpha=0.15),
+        backgroundColor: color.withValues(alpha: 0.15),
         child: Icon(icon, color: color),
       ),
       title: Text('ضد $opponent'),

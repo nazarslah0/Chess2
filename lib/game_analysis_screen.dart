@@ -665,7 +665,7 @@ class _GameAnalysisScreenState
         arrows.add(
           _decodeArrow(
             _bestUci[0],
-            Colors.green.withValues(alpha=0.85),
+            Colors.green.withValues(alpha: 0.85),
           ),
         );
       }
@@ -695,7 +695,7 @@ class _GameAnalysisScreenState
         arrows.add(
           _decodeArrow(
             _bestUci[k],
-            Colors.green.withValues(alpha=0.85),
+            Colors.green.withValues(alpha: 0.85),
           ),
         );
       }
@@ -1259,7 +1259,7 @@ class _GameAnalysisScreenState
         width: double.infinity,
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: Colors.grey.withValues(alpha=0.06),
+          color: Colors.grey.withValues(alpha: 0.06),
           borderRadius: BorderRadius.circular(12),
         ),
         child: Column(
@@ -1319,10 +1319,10 @@ class _GameAnalysisScreenState
       width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: info.color.withValues(alpha=0.07),
+        color: info.color.withValues(alpha: 0.07),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: info.color.withValues(alpha=0.3),
+          color: info.color.withValues(alpha: 0.3),
         ),
       ),
       child: Column(
@@ -1424,7 +1424,7 @@ class _GameAnalysisScreenState
             vertical: 8,
           ),
           decoration: BoxDecoration(
-            color: scheme.primary.withValues(alpha=0.08),
+            color: scheme.primary.withValues(alpha: 0.08),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Text(
@@ -1471,13 +1471,13 @@ class _GameAnalysisScreenState
     final iconSize = primary ? 28.0 : 22.0;
 
     final bgColor = !enabled
-        ? scheme.onSurface.withValues(alpha=0.06)
+        ? scheme.onSurface.withValues(alpha: 0.06)
         : primary
             ? scheme.primary
-            : scheme.primary.withValues(alpha=0.12);
+            : scheme.primary.withValues(alpha: 0.12);
 
     final iconColor = !enabled
-        ? scheme.onSurface.withValues(alpha=0.28)
+        ? scheme.onSurface.withValues(alpha: 0.28)
         : primary
             ? scheme.onPrimary
             : scheme.primary;
@@ -1513,7 +1513,7 @@ class _GameAnalysisScreenState
         horizontal: 10,
       ),
       decoration: BoxDecoration(
-        color: Colors.grey.withValues(alpha=0.08),
+        color: Colors.grey.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
@@ -1585,7 +1585,7 @@ class _GameAnalysisScreenState
       width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.grey.withValues(alpha=0.06),
+        color: Colors.grey.withValues(alpha: 0.06),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
@@ -1696,7 +1696,7 @@ class _GameAnalysisScreenState
           width: double.infinity,
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: Colors.grey.withValues(alpha=0.06),
+            color: Colors.grey.withValues(alpha: 0.06),
             borderRadius: BorderRadius.circular(12),
           ),
           child: Column(
@@ -1737,7 +1737,7 @@ class _GameAnalysisScreenState
               color: Theme.of(context)
                   .colorScheme
                   .primary
-                  .withValues(alpha=0.06),
+                  .withValues(alpha: 0.06),
               borderRadius:
                   BorderRadius.circular(12),
             ),
@@ -1939,7 +1939,7 @@ class _GameAnalysisScreenState
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.grey.withValues(alpha=0.06),
+        color: Colors.grey.withValues(alpha: 0.06),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
@@ -1991,10 +1991,10 @@ class _GameAnalysisScreenState
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: color.withValues(alpha=0.06),
+        color: color.withValues(alpha: 0.06),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: color.withValues(alpha=0.25),
+          color: color.withValues(alpha: 0.25),
         ),
       ),
       child: Column(
@@ -2064,7 +2064,7 @@ class _GameAnalysisScreenState
       width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.grey.withValues(alpha=0.06),
+        color: Colors.grey.withValues(alpha: 0.06),
         borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
@@ -2211,8 +2211,8 @@ class _GameAnalysisScreenState
               ? Theme.of(context)
                   .colorScheme
                   .primary
-                  .withValues(alpha=0.15)
-              : (info?.color.withValues(alpha=0.10) ??
+                  .withValues(alpha: 0.15)
+              : (info?.color.withValues(alpha: 0.10) ??
                   Colors.transparent),
           borderRadius: BorderRadius.circular(6),
           border: isCurrent
@@ -2341,7 +2341,7 @@ class _GameAnalysisScreenState
       child: ListTile(
         leading: CircleAvatar(
           backgroundColor:
-              info.color.withValues(alpha=0.15),
+              info.color.withValues(alpha: 0.15),
           child: Icon(info.icon, color: info.color),
         ),
         title: Text(
@@ -2399,7 +2399,7 @@ class _GameAnalysisScreenState
           child: ListTile(
             leading: CircleAvatar(
               backgroundColor:
-                  info.color.withValues(alpha=0.15),
+                  info.color.withValues(alpha: 0.15),
               child: Text(
                 '${index + 1}',
                 style: TextStyle(
@@ -2607,9 +2607,9 @@ class _EvalGraphPainter extends CustomPainter {
 
     // الخلفية: نصف فاتح (أبيض أفضل) ونصف غامق (أسود أفضل).
     final whiteBg = Paint()
-      ..color = Colors.grey.withValues(alpha=0.08);
+      ..color = Colors.grey.withValues(alpha: 0.08);
     final blackBg = Paint()
-      ..color = Colors.grey.withValues(alpha=0.18);
+      ..color = Colors.grey.withValues(alpha: 0.18);
 
     canvas.drawRect(
       Rect.fromLTWH(0, 0, size.width, mid),
@@ -2621,7 +2621,7 @@ class _EvalGraphPainter extends CustomPainter {
     );
 
     final zeroPaint = Paint()
-      ..color = Colors.grey.withValues(alpha=0.5)
+      ..color = Colors.grey.withValues(alpha: 0.5)
       ..strokeWidth = 1;
 
     canvas.drawLine(
@@ -2680,7 +2680,7 @@ class _EvalGraphPainter extends CustomPainter {
         Offset(x, 0),
         Offset(x, size.height),
         Paint()
-          ..color = Colors.red.withValues(alpha=0.4)
+          ..color = Colors.red.withValues(alpha: 0.4)
           ..strokeWidth = 1,
       );
 

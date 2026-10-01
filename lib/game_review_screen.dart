@@ -205,7 +205,7 @@ class _GameReviewScreenState
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.sports_esports_outlined, size: 52, color: Chess2Theme.muted.withValues(alpha=.65)),
+                            Icon(Icons.sports_esports_outlined, size: 52, color: Chess2Theme.muted.withValues(alpha: .65)),
                             const SizedBox(height: 10),
                             Text(_loadingGames ? 'جاري التحميل...' : 'أدخل Username لعرض المباريات', style: const TextStyle(color: Chess2Theme.muted)),
                           ],
@@ -266,7 +266,7 @@ class _GameReviewScreenState
             Container(
               width: 42,
               height: 42,
-              decoration: BoxDecoration(color: color.withValues(alpha=.12), borderRadius: BorderRadius.circular(13)),
+              decoration: BoxDecoration(color: color.withValues(alpha: .12), borderRadius: BorderRadius.circular(13)),
               child: Icon(icon, color: color),
             ),
             const SizedBox(width: 12),

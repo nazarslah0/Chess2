@@ -88,7 +88,7 @@ class Chess2Theme {
       dividerTheme: const DividerThemeData(color: border, space: 1),
       chipTheme: ChipThemeData(
         backgroundColor: surface2,
-        selectedColor: blue.withValues(alpha=.20),
+        selectedColor: blue.withValues(alpha: .20),
         side: const BorderSide(color: border),
         labelStyle: const TextStyle(color: text),
         shape: RoundedRectangleBorder(
