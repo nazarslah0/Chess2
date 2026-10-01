@@ -81,6 +81,28 @@ jobs:
             .
 
       # =========================================================
+      # Clean generated/sample files that conflict with Chess2
+      # =========================================================
+      - name: Clean generated Flutter sample files
+        shell: bash
+        run: |
+          # The repository previously contained a nested lib/pubspec.yaml.
+          # Flutter/Dart must use the root pubspec.yaml only.
+          rm -f lib/pubspec.yaml
+
+          # flutter create can generate the default widget_test.dart.
+          # It references package:chess/main.dart, while Chess2 uses its
+          # own application entry point and does not ship that sample test.
+          rm -rf test
+
+          echo "Cleaned nested lib/pubspec.yaml and generated test files."
+
+          if [ -e lib/pubspec.yaml ]; then
+            echo "ERROR: lib/pubspec.yaml still exists."
+            exit 1
+          fi
+
+      # =========================================================
       # Configure Android native library packaging
       # =========================================================
       - name: Configure Android native library packaging
