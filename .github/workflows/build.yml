@@ -299,7 +299,7 @@ jobs:
                   private const val EVENT_CHANNEL =
                       "chess_analyzer/stockfish/output"
 
-                  private const val MAX_WORKERS = 4
+                  private const val MAX_WORKERS = 6
               }
 
               private val processes =
