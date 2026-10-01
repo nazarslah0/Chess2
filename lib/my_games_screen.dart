@@ -67,7 +67,7 @@ class _SourceCard extends StatelessWidget {
             Container(
               width: 52,
               height: 52,
-              decoration: BoxDecoration(color: color.withOpacity(.13), borderRadius: BorderRadius.circular(15)),
+              decoration: BoxDecoration(color: color.withValues(alpha=.13), borderRadius: BorderRadius.circular(15)),
               child: Icon(icon, color: color, size: 28),
             ),
             const SizedBox(width: 14),

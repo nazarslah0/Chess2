@@ -14,8 +14,6 @@ class HomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-
     return Scaffold(
       body: SafeArea(
         child: CustomScrollView(
@@ -187,7 +185,7 @@ class _HeroCard extends StatelessWidget {
               width: 64,
               height: 64,
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(.10),
+                color: Colors.white.withValues(alpha=.10),
                 borderRadius: BorderRadius.circular(18),
               ),
               child: const Icon(Icons.analytics_outlined, size: 34, color: Colors.white),
@@ -238,7 +236,7 @@ class _DashboardCard extends StatelessWidget {
             Container(
               width: 42,
               height: 42,
-              decoration: BoxDecoration(color: color.withOpacity(.13), borderRadius: BorderRadius.circular(13)),
+              decoration: BoxDecoration(color: color.withValues(alpha=.13), borderRadius: BorderRadius.circular(13)),
               child: Icon(icon, color: color),
             ),
             const Spacer(),
