@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:chess/chess.dart' as ch;
 import 'package:flutter/material.dart';
@@ -8,6 +9,7 @@ import 'engine_service.dart';
 import 'board_widget.dart';
 import 'pgn_utils.dart';
 import 'game_review_models.dart';
+import 'app_theme.dart';
 
 /// شاشة تحليل مباراة واحدة — **مصدر واحد للتحليل** تُستخدم من
 /// Chess.com ومن Lichess ومن PGN مُلصَق يدويًا على حدٍّ سواء.
@@ -817,6 +819,25 @@ class _GameAnalysisScreenState
     };
   }
 
+  Map<String, double> get _acplBySide {
+    double w = 0, b = 0;
+    int wn = 0, bn = 0;
+    for (var i = 0; i < _plies.length && i < _qualities.length; i++) {
+      final loss = math.max(0, _lossAt(i)).toDouble();
+      if (_plies[i].color == 'w') {
+        w += loss;
+        wn++;
+      } else {
+        b += loss;
+        bn++;
+      }
+    }
+    return {
+      'w': wn == 0 ? 0 : w / wn,
+      'b': bn == 0 ? 0 : b / bn,
+    };
+  }
+
   /// متوسط الدقة لكل لاعب في كل مرحلة من مراحل اللعبة.
   Map<String, Map<String, double>> get _accuracyByPhase {
     final sums = {
@@ -884,36 +905,32 @@ class _GameAnalysisScreenState
     return result;
   }
 
-  /// نقلة "رائعة!!" الأبرز في المباراة (أكبر قيمة تضحية)، أو
-  /// null إن لم توجد أي نقلة رائعة — لا نخترع "أفضل نقلة"
-  /// بديلة بلا معيار حقيقي يميّزها عن عشرات النقلات "الأفضل".
+  /// أفضل نقلة فعلية حسب Stockfish، منفصلة عن تصنيف Brilliant.
   int? get _bestMoveIndex {
+    for (var i = 0; i < _plies.length; i++) {
+      if (i >= _bestUci.length) continue;
+      if (_uciMatchesPlayed(_bestUci[i], _plies[i])) return i;
+    }
+    return null;
+  }
+
+  int? get _brilliantMoveIndex {
     int? best;
     var bestScore = -1;
-
     for (var i = 0; i < _qualities.length; i++) {
       if (_qualities[i] != MoveQuality.brilliant) continue;
-
       try {
-        final boardBefore = GameState.parseBoard(
-          _plies[i].fenBefore.split(' ').first,
-        );
-
-        final movingPiece =
-            boardBefore[_plies[i].from];
-
-        final movingValue = movingPiece != null &&
-                movingPiece.length == 2
+        final boardBefore = GameState.parseBoard(_plies[i].fenBefore.split(' ').first);
+        final movingPiece = boardBefore[_plies[i].from];
+        final value = movingPiece != null && movingPiece.length == 2
             ? (pieceValues[movingPiece[1]] ?? 0)
             : 0;
-
-        if (movingValue > bestScore) {
-          bestScore = movingValue;
+        if (value > bestScore) {
+          bestScore = value;
           best = i;
         }
       } catch (_) {}
     }
-
     return best;
   }
 
@@ -1003,14 +1020,16 @@ class _GameAnalysisScreenState
     for (var i = 0; i < _qualities.length; i++) {
       final q = _qualities[i];
 
+      final loss = _lossAt(i);
       if (q == MoveQuality.mistake ||
           q == MoveQuality.blunder ||
-          q == MoveQuality.miss) {
+          q == MoveQuality.miss ||
+          loss >= 80) {
         moments.add(
           _CriticalMoment(
             plyIndex: i,
             quality: q,
-            lossCp: _lossAt(i),
+            lossCp: loss,
           ),
         );
       }
@@ -1023,6 +1042,17 @@ class _GameAnalysisScreenState
     return moments.take(8).toList();
   }
 
+  Future<void> _cancelAnalysis() async {
+    if (!_analyzing) return;
+    _requestToken++;
+    await _engine.stop();
+    if (!mounted) return;
+    setState(() {
+      _analyzing = false;
+      _analysisStage = 'تم إيقاف التحليل';
+    });
+  }
+
   // ============================================================
   // Build
   // ============================================================
@@ -1031,43 +1061,43 @@ class _GameAnalysisScreenState
   Widget build(BuildContext context) {
     if (_parseError != null) {
       return Scaffold(
-        appBar: AppBar(
-          title: const Text('تحليل المباراة'),
-        ),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Text(
-              _parseError!,
-              textAlign: TextAlign.center,
-            ),
-          ),
-        ),
+        appBar: AppBar(title: const Text('تحليل المباراة')),
+        body: Center(child: Padding(padding: const EdgeInsets.all(20), child: Text(_parseError!, textAlign: TextAlign.center))),
       );
     }
 
+    final progress = (_progress * 100).round();
+
     return Scaffold(
       appBar: AppBar(
-        title: Text('$_whiteName ضد $_blackName'),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('$_whiteName  •  $_blackName', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+            if (widget.sourceLabel.isNotEmpty)
+              Text(widget.sourceLabel, style: const TextStyle(fontSize: 10, color: Chess2Theme.muted)),
+          ],
+        ),
         actions: [
+          if (_analyzing)
+            IconButton(
+              tooltip: 'إلغاء التحليل',
+              onPressed: _cancelAnalysis,
+              icon: const Icon(Icons.stop_circle_outlined, color: Chess2Theme.red),
+            ),
           IconButton(
             tooltip: 'قلب الرقعة',
-            icon: const Icon(
-              Icons.swap_vert_rounded,
-            ),
-            onPressed: () {
-              setState(() {
-                _boardState.flipBoard();
-              });
-            },
+            icon: const Icon(Icons.swap_vert_rounded),
+            onPressed: () => setState(_boardState.flipBoard),
           ),
         ],
         bottom: TabBar(
           controller: _tabController,
           isScrollable: true,
+          tabAlignment: TabAlignment.start,
           tabs: const [
-            Tab(text: 'نظرة عامة'),
-            Tab(text: 'تقرير المباراة'),
+            Tab(text: 'المراجعة'),
+            Tab(text: 'التقرير'),
             Tab(text: 'النقلات'),
             Tab(text: 'الأخطاء'),
             Tab(text: 'اللحظات الحرجة'),
@@ -1078,24 +1108,35 @@ class _GameAnalysisScreenState
         child: Column(
           children: [
             if (_analyzing)
-              LinearProgressIndicator(
-                value: _progress,
-              ),
-            if (_analyzing)
-              Padding(
-                padding:
-                    const EdgeInsets.symmetric(
-                  vertical: 6,
+              Container(
+                margin: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Chess2Theme.surface,
+                  borderRadius: BorderRadius.circular(15),
+                  border: Border.all(color: Chess2Theme.border),
                 ),
-                child: Text(
-                  '$_analysisStage... '
-                  '${(_progress * 100).round()}%'
-                  ' ($_analysisDone/'
-                  '$_analysisTotal) • '
-                  '${_engine.recommendedWorkerCount} أنوية',
-                  style: Theme.of(context)
-                      .textTheme
-                      .bodySmall,
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.bolt_rounded, color: Chess2Theme.blue, size: 18),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text('$_analysisStage', style: const TextStyle(fontWeight: FontWeight.w800))),
+                        Text('$progress%', style: const TextStyle(color: Chess2Theme.blue, fontWeight: FontWeight.w900)),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: LinearProgressIndicator(value: _progress, minHeight: 6),
+                    ),
+                    const SizedBox(height: 7),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Text('$_analysisDone / $_analysisTotal  •  ${_engine.recommendedWorkerCount} Workers', style: const TextStyle(color: Chess2Theme.muted, fontSize: 10)),
+                    ),
+                  ],
                 ),
               ),
             Expanded(
@@ -1124,9 +1165,25 @@ class _GameAnalysisScreenState
     final hasEval = _evalPawns.isNotEmpty;
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(6, 10, 6, 12),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 18),
       child: Column(
         children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: Chess2Theme.surface,
+              borderRadius: BorderRadius.circular(15),
+              border: Border.all(color: Chess2Theme.border),
+            ),
+            child: Row(
+              children: [
+                Expanded(child: Text(_whiteName, textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w800))),
+                Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: Chess2Theme.surface2, borderRadius: BorderRadius.circular(10)), child: Text(_resultText.isEmpty ? 'VS' : _resultText, style: const TextStyle(fontWeight: FontWeight.w900))),
+                Expanded(child: Text(_blackName, textAlign: TextAlign.left, style: const TextStyle(fontWeight: FontWeight.w800))),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
           if (_resultText.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(
@@ -1176,7 +1233,7 @@ class _GameAnalysisScreenState
                     },
                     child: BoardWidget(
                       state: _boardState,
-                      boardTheme: boardThemes[0],
+                      boardTheme: boardThemes[1],
                       pieceTheme: pieceThemes[0],
                       onTap: (_) {},
                       arrows: _arrowsForCurrent(),
@@ -1240,7 +1297,7 @@ class _GameAnalysisScreenState
               Text(
                 'الخط المقترح: $pv',
                 style: TextStyle(
-                  color: Colors.grey.shade700,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
                   fontSize: 13,
                 ),
               ),
@@ -1322,7 +1379,7 @@ class _GameAnalysisScreenState
                 'خسارة تقييم: '
                 '${(loss / 100).toStringAsFixed(2)}',
                 style: TextStyle(
-                  color: Colors.grey.shade700,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
                   fontSize: 12,
                 ),
               ),
@@ -1343,7 +1400,7 @@ class _GameAnalysisScreenState
             Text(
               'الخط الرئيسي: $pv',
               style: TextStyle(
-                color: Colors.grey.shade700,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
                 fontSize: 12,
               ),
             ),
@@ -1505,7 +1562,7 @@ class _GameAnalysisScreenState
           'دقة $label',
           style: TextStyle(
             fontSize: 12,
-            color: Colors.grey.shade600,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
           ),
         ),
       ],
@@ -1535,7 +1592,7 @@ class _GameAnalysisScreenState
                 '   •   '
                 '$_blackName ${b.toStringAsFixed(0)}%',
                 style: TextStyle(
-                  color: Colors.grey.shade700,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
               ),
             ),
@@ -1737,6 +1794,7 @@ class _GameAnalysisScreenState
             Expanded(
               child: _playerStatsCard(
                 _whiteName,
+                'w',
                 acc['w'] ?? 0,
                 countsBySide['w']!,
               ),
@@ -1745,6 +1803,7 @@ class _GameAnalysisScreenState
             Expanded(
               child: _playerStatsCard(
                 _blackName,
+                'b',
                 acc['b'] ?? 0,
                 countsBySide['b']!,
               ),
@@ -1781,8 +1840,7 @@ class _GameAnalysisScreenState
                 color: const Color(0xFF1BADA6),
                 plyIndex: bestIdx,
                 emptyText:
-                    'لا توجد نقلة رائعة بارزة في'
-                    ' هذه المباراة.',
+                    'لا توجد أفضل نقلة مؤكدة في بيانات المحرك.',
                 buttonText: 'عرض النقلة',
               ),
             ),
@@ -1865,6 +1923,7 @@ class _GameAnalysisScreenState
 
   Widget _playerStatsCard(
     String name,
+    String side,
     double accuracy,
     Map<MoveQuality, int> counts,
   ) {
@@ -1923,10 +1982,12 @@ class _GameAnalysisScreenState
           ),
           const Text(
             'الدقة',
-            style: TextStyle(
-              fontSize: 11,
-              color: Colors.grey,
-            ),
+            style: TextStyle(fontSize: 11, color: Chess2Theme.muted),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            'ACPL: ${(_acplBySide[side] ?? 0).toStringAsFixed(0)}',
+            style: const TextStyle(fontSize: 11, color: Chess2Theme.muted, fontWeight: FontWeight.w700),
           ),
           const Divider(height: 14),
           row(MoveQuality.excellent),
@@ -1979,7 +2040,7 @@ class _GameAnalysisScreenState
               emptyText,
               style: TextStyle(
                 fontSize: 12,
-                color: Colors.grey.shade700,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
             )
           else ...[
@@ -1997,7 +2058,7 @@ class _GameAnalysisScreenState
               '${(_lossAt(plyIndex) / 100).toStringAsFixed(2)}',
               style: TextStyle(
                 fontSize: 12,
-                color: Colors.grey.shade700,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
             ),
             const SizedBox(height: 6),
@@ -2042,7 +2103,7 @@ class _GameAnalysisScreenState
               '${stat.moveCount} نقلة',
               textAlign: TextAlign.center,
               style: TextStyle(
-                color: Colors.grey.shade700,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
                 fontSize: 12,
               ),
             ),
@@ -2063,7 +2124,7 @@ class _GameAnalysisScreenState
               style: TextStyle(
                 color: stat.errorCount > 0
                     ? const Color(0xFFD9483D)
-                    : Colors.grey.shade700,
+                    : Theme.of(context).colorScheme.onSurfaceVariant,
                 fontSize: 12,
               ),
             ),
@@ -2106,7 +2167,7 @@ class _GameAnalysisScreenState
               child: Text(
                 '${(i ~/ 2) + 1}.',
                 style: TextStyle(
-                  color: Colors.grey.shade600,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
               ),
             ),

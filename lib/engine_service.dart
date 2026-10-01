@@ -52,7 +52,13 @@ class EngineService {
   static const EventChannel _eventChannel =
       EventChannel('chess_analyzer/stockfish/output');
 
-  static const int _maxWorkers = 4;
+  static const int _maxWorkers = 6;
+
+  // Session cache: يمنع إعادة تحليل نفس FEN بنفس إعدادات المحرك.
+  static final Map<String, EnginePositionResult> _positionCache =
+      <String, EnginePositionResult>{};
+  static const int _maxCacheEntries = 768;
+  static const String _engineCacheVersion = 'stockfish19-fast-v2';
 
   StreamSubscription<dynamic>? _outputSubscription;
 
@@ -85,7 +91,10 @@ class EngineService {
   /// حتى لا يتحول الهاتف إلى حمل زائد عند تحليل مباراة طويلة.
   int get recommendedWorkerCount {
     final processors = Platform.numberOfProcessors;
-    return math.max(1, math.min(_maxWorkers, processors));
+    // نترك نواة واحدة للنظام/واجهة التطبيق عندما يكون ذلك ممكنًا،
+    // لكن لا ننزل عن عاملين على الأجهزة متعددة الأنوية.
+    final suggested = processors >= 4 ? processors - 1 : processors;
+    return math.max(1, math.min(_maxWorkers, suggested));
   }
 
   // ============================================================
@@ -617,6 +626,19 @@ class EngineService {
   // Fast multi-core analysis
   // ============================================================
 
+  String _cacheKey(String fen, int depth, int? movetimeMs) {
+    return '$_engineCacheVersion|$depth|${movetimeMs ?? 0}|${fen.trim()}';
+  }
+
+  EnginePositionResult? _cacheGet(String key) => _positionCache[key];
+
+  void _cachePut(String key, EnginePositionResult value) {
+    if (_positionCache.length >= _maxCacheEntries) {
+      _positionCache.remove(_positionCache.keys.first);
+    }
+    _positionCache[key] = value;
+  }
+
   /// يحلل مجموعة وضعيات باستخدام عدة عمليات Stockfish مستقلة.
   ///
   /// كل Worker يستخدم Thread=1، وبالتالي:
@@ -633,48 +655,53 @@ class EngineService {
     int? movetimeMs = 120,
     void Function(int completed, int total)? onProgress,
   }) async {
-    if (fens.isEmpty) {
-      return const <EnginePositionResult>[];
-    }
+    if (fens.isEmpty) return const <EnginePositionResult>[];
 
     await init();
 
-    final requestedWorkers =
-        workerCount ?? recommendedWorkerCount;
-
+    final requestedWorkers = workerCount ?? recommendedWorkerCount;
     final count = math.max(
       1,
-      math.min(
-        _maxWorkers,
-        math.min(requestedWorkers, fens.length),
-      ),
+      math.min(_maxWorkers, math.min(requestedWorkers, fens.length)),
     );
 
     for (int i = 0; i < count; i++) {
       await _ensureWorker(i);
     }
 
-    final results =
-        List<EnginePositionResult?>.filled(
-      fens.length,
-      null,
-    );
-
-    int nextIndex = 0;
+    final results = List<EnginePositionResult?>.filled(fens.length, null);
+    final pending = <int>[];
     int completed = 0;
+
+    // استرجاع النتائج المحفوظة أولًا. هذا يجعل إعادة فتح نفس المباراة
+    // شبه فورية أثناء جلسة التطبيق.
+    for (int i = 0; i < fens.length; i++) {
+      final key = _cacheKey(fens[i], depth, movetimeMs);
+      final cached = _cacheGet(key);
+      if (cached != null) {
+        results[i] = cached;
+        completed++;
+      } else {
+        pending.add(i);
+      }
+    }
+
+    onProgress?.call(completed, fens.length);
+
+    if (pending.isEmpty) {
+      return results.cast<EnginePositionResult>();
+    }
+
+    int nextPending = 0;
     final generation = ++_batchGeneration;
 
     Future<void> workerLoop(int workerId) async {
       while (true) {
-        if (_disposed || generation != _batchGeneration) {
-          return;
-        }
+        if (_disposed || generation != _batchGeneration) return;
+        if (nextPending >= pending.length) return;
 
-        if (nextIndex >= fens.length) {
-          return;
-        }
-
-        final index = nextIndex++;
+        final queueIndex = nextPending++;
+        final index = pending[queueIndex];
         final fen = fens[index].trim();
 
         final result = await _analyzeOnWorker(
@@ -686,33 +713,23 @@ class EngineService {
         );
 
         results[index] = result;
+        _cachePut(_cacheKey(fen, depth, movetimeMs), result);
         completed++;
-
-        onProgress?.call(
-          completed,
-          fens.length,
-        );
+        onProgress?.call(completed, fens.length);
       }
     }
 
     await Future.wait(
-      List<Future<void>>.generate(
-        count,
-        (workerId) => workerLoop(workerId),
-      ),
+      List<Future<void>>.generate(count, (workerId) => workerLoop(workerId)),
     );
 
     return results
-        .map(
-          (r) =>
-              r ??
-              const EnginePositionResult(
-                evalPawns: 0,
-                evalLabel: '0.00',
-                bestUci: '',
-                pv: <String>[],
-              ),
-        )
+        .map((r) => r ?? const EnginePositionResult(
+              evalPawns: 0,
+              evalLabel: '0.00',
+              bestUci: '',
+              pv: <String>[],
+            ))
         .toList(growable: false);
   }
 

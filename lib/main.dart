@@ -7,6 +7,7 @@ import 'board_widget.dart';
 import 'panels.dart';
 import 'sound_service.dart';
 import 'home_screen.dart';
+import 'app_theme.dart';
 
 void main() {
   runApp(
@@ -29,16 +30,9 @@ class ChessAnalyzerApp extends StatelessWidget {
       title: 'محلل وضعيات الشطرنج',
       debugShowCheckedModeBanner: false,
       locale: const Locale('ar'),
-      theme: ThemeData(
-        colorSchemeSeed: Colors.indigo,
-        useMaterial3: true,
-      ),
-      darkTheme: ThemeData(
-        colorSchemeSeed: Colors.indigo,
-        useMaterial3: true,
-        brightness: Brightness.dark,
-      ),
-      themeMode: ThemeMode.system,
+      theme: Chess2Theme.light(),
+      darkTheme: Chess2Theme.dark(),
+      themeMode: ThemeMode.dark,
       // نطبّق RTL على كل الشاشات (بما فيها الشاشات التي
       // تُفتح لاحقًا عبر Navigator.push)، بدل تغليف الشاشة
       // الأولى فقط.
