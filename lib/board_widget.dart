@@ -34,6 +34,11 @@ class BoardWidget extends StatelessWidget {
 
   final bool showCoordinates;
 
+  /// عند false: الرقعة للعرض فقط (بلا Drag & Drop)، تُستخدم
+  /// في شاشات المراجعة/التحليل حيث التنقل بين النقلات لا
+  /// يجب أن يختلط مع محاولة تحريك القطع.
+  final bool interactive;
+
   final void Function(String square) onTap;
 
   const BoardWidget({
@@ -47,6 +52,7 @@ class BoardWidget extends StatelessWidget {
     this.arrows = const [],
     this.targets = const {},
     this.showCoordinates = true,
+    this.interactive = true,
   });
 
   static const String files = 'abcdefgh';
@@ -219,8 +225,9 @@ class BoardWidget extends StatelessWidget {
                           return DragTarget<String>(
                             onWillAcceptWithDetails:
                                 (details) =>
+                                    interactive &&
                                     state.mode ==
-                                    'play',
+                                        'play',
                             onAcceptWithDetails:
                                 (details) {
                               onTap(square);
@@ -289,9 +296,10 @@ class BoardWidget extends StatelessWidget {
                                         padding:
                                             const EdgeInsets
                                                 .all(3),
-                                        child: state
-                                                    .mode ==
-                                                'play'
+                                        child: interactive &&
+                                                state
+                                                        .mode ==
+                                                    'play'
                                             ? Draggable<
                                                 String>(
                                                 data:

@@ -49,6 +49,7 @@ class _GameAnalysisScreenState
   List<double> _evalPawns = <double>[];
   List<String> _evalLabels = <String>[];
   List<String> _bestUci = <String>[];
+  List<List<String>> _pvUci = <List<String>>[];
   List<MoveQuality> _qualities = <MoveQuality>[];
 
   Map<String, String> _headers = <String, String>{};
@@ -88,6 +89,10 @@ class _GameAnalysisScreenState
     _evalLabels =
         List<String>.filled(_fens.length, '0.00');
     _bestUci = List<String>.filled(_fens.length, '');
+    _pvUci = List<List<String>>.generate(
+      _fens.length,
+      (_) => const <String>[],
+    );
 
     _boardState.loadFen(_fens.first);
 
@@ -128,18 +133,20 @@ class _GameAnalysisScreenState
 
     double lastPawns = 0;
     String lastLabel = '0.00';
+    List<String> lastPv = const <String>[];
 
     _engine.onInfo = (multipv, line) {
       if (multipv == 1) {
         lastPawns = line.evalPawns;
         lastLabel = line.evalLabel;
+        lastPv = line.uciMoves;
       }
     };
 
     _engine.onBestMove = (uci) {
       if (!completer.isCompleted) {
         completer.complete(
-          _Eval(lastPawns, lastLabel, uci),
+          _Eval(lastPawns, lastLabel, uci, lastPv),
         );
       }
     };
@@ -153,7 +160,7 @@ class _GameAnalysisScreenState
     return completer.future.timeout(
       const Duration(seconds: 30),
       onTimeout: () =>
-          _Eval(lastPawns, lastLabel, ''),
+          _Eval(lastPawns, lastLabel, '', lastPv),
     );
   }
 
@@ -184,6 +191,7 @@ class _GameAnalysisScreenState
       _evalPawns[i] = r.pawns;
       _evalLabels[i] = r.label;
       _bestUci[i] = r.bestUci;
+      _pvUci[i] = r.pv;
 
       setState(() {
         _progress = (i + 1) / _fens.length;
@@ -359,6 +367,107 @@ class _GameAnalysisScreenState
       return brilliant ? MoveQuality.brilliant : null;
     } catch (_) {
       return null;
+    }
+  }
+
+  /// يحوّل قائمة نقلات PV (UCI) بدءًا من FEN معيّن إلى نص SAN
+  /// مقروء، لعرضها كخط رئيسي مقترح تحت الرقعة.
+  String _pvToSan(String fen, List<String> pvUci) {
+    if (pvUci.isEmpty) return '';
+
+    try {
+      final game = ch.Chess();
+      game.load(fen);
+
+      final sanParts = <String>[];
+
+      for (final uci in pvUci.take(6)) {
+        if (uci.length < 4) break;
+
+        final from = uci.substring(0, 2);
+        final to = uci.substring(2, 4);
+        final promo =
+            uci.length > 4 ? uci.substring(4) : null;
+
+        List<dynamic> legal = [];
+
+        try {
+          legal = game.moves(
+            <String, dynamic>{'verbose': true},
+          );
+        } catch (_) {
+          break;
+        }
+
+        dynamic matched;
+
+        for (final m in legal) {
+          String? mFrom;
+          String? mTo;
+
+          try {
+            mFrom = m is Map
+                ? m['from']?.toString()
+                : (m as dynamic).fromAlgebraic
+                    as String;
+            mTo = m is Map
+                ? m['to']?.toString()
+                : (m as dynamic).toAlgebraic as String;
+          } catch (_) {}
+
+          if (mFrom == from && mTo == to) {
+            matched = m;
+            break;
+          }
+        }
+
+        if (matched == null) break;
+
+        final args = <String, dynamic>{
+          'from': from,
+          'to': to,
+        };
+
+        if (promo != null && promo.isNotEmpty) {
+          args['promotion'] = promo;
+        }
+
+        String san = '';
+
+        try {
+          san = matched is Map
+              ? (matched['san'] ?? '').toString()
+              : '';
+        } catch (_) {}
+
+        final ok = game.move(args);
+
+        if (ok == false) break;
+
+        sanParts.add(san.isEmpty ? '$from$to' : san);
+      }
+
+      return sanParts.join(' ');
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /// لاحقة تقليدية (?, ??, ?!, !!) تُضاف لنص SAN، بنفس أسلوب
+  /// الأمثلة المرفقة في الطلب.
+  String _sanSuffix(MoveQuality q) {
+    switch (q) {
+      case MoveQuality.brilliant:
+        return '!!';
+      case MoveQuality.inaccuracy:
+        return '?!';
+      case MoveQuality.mistake:
+      case MoveQuality.miss:
+        return '?';
+      case MoveQuality.blunder:
+        return '??';
+      default:
+        return '';
     }
   }
 
@@ -770,12 +879,33 @@ class _GameAnalysisScreenState
               Expanded(
                 child: AspectRatio(
                   aspectRatio: 1,
-                  child: BoardWidget(
-                    state: _boardState,
-                    boardTheme: boardThemes[0],
-                    pieceTheme: pieceThemes[0],
-                    onTap: (_) {},
-                    arrows: _arrowsForCurrent(),
+                  // سحب يمين/يسار للتنقل بين النقلات، دون
+                  // التعارض مع تحريك القطع (الرقعة هنا للعرض
+                  // فقط عبر interactive: false).
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onHorizontalDragEnd: (details) {
+                      final v = details
+                          .primaryVelocity;
+
+                      if (v == null) return;
+
+                      // سحب لليسار (سرعة سالبة) = النقلة
+                      // التالية، كتقليب صفحة إلى الأمام.
+                      if (v < -150) {
+                        _goTo(_currentIndex + 1);
+                      } else if (v > 150) {
+                        _goTo(_currentIndex - 1);
+                      }
+                    },
+                    child: BoardWidget(
+                      state: _boardState,
+                      boardTheme: boardThemes[0],
+                      pieceTheme: pieceThemes[0],
+                      onTap: (_) {},
+                      arrows: _arrowsForCurrent(),
+                      interactive: false,
+                    ),
                   ),
                 ),
               ),
@@ -783,12 +913,165 @@ class _GameAnalysisScreenState
           ),
           const SizedBox(height: 10),
           _buildNavControls(),
+          if (_fens.length > 1)
+            Slider(
+              value: _currentIndex.toDouble(),
+              min: 0,
+              max: (_fens.length - 1).toDouble(),
+              divisions: _fens.length - 1,
+              label: '$_currentIndex',
+              onChanged: (v) => _goTo(v.round()),
+            ),
+          const SizedBox(height: 4),
+          if (!_analyzing && _plies.isNotEmpty)
+            _buildCurrentMoveInfo(),
           const SizedBox(height: 12),
           if (!_analyzing && _qualities.isNotEmpty)
             _buildAccuracySummary(),
           const SizedBox(height: 12),
           if (!_analyzing && _qualities.isNotEmpty)
             _buildPhaseSummary(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCurrentMoveInfo() {
+    if (_currentIndex == 0) {
+      final pv = _pvUci.isNotEmpty
+          ? _pvToSan(_fens[0], _pvUci[0])
+          : '';
+
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.grey.withOpacity(0.06),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          crossAxisAlignment:
+              CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'الوضعية الابتدائية',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            if (pv.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(
+                'الخط المقترح: $pv',
+                style: TextStyle(
+                  color: Colors.grey.shade700,
+                  fontSize: 13,
+                ),
+              ),
+            ],
+          ],
+        ),
+      );
+    }
+
+    final k = _currentIndex - 1;
+
+    if (k >= _qualities.length || k >= _plies.length) {
+      return const SizedBox();
+    }
+
+    final ply = _plies[k];
+    final q = _qualities[k];
+    final info = moveQualityInfo[q]!;
+    final loss = _lossAt(k);
+    final moveNumber = (k ~/ 2) + 1;
+
+    final bestUci = k < _bestUci.length
+        ? _bestUci[k]
+        : '';
+
+    final bestSan = bestUci.length >= 4
+        ? _pvToSan(_fens[k], [bestUci])
+        : '';
+
+    final pv = k < _pvUci.length
+        ? _pvToSan(_fens[k], _pvUci[k])
+        : '';
+
+    final isBestOrBrilliant =
+        q == MoveQuality.best ||
+        q == MoveQuality.brilliant;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: info.color.withOpacity(0.07),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: info.color.withOpacity(0.3),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment:
+            CrossAxisAlignment.start,
+        children: [
+          Text(
+            'النقلة الحالية:  $moveNumber'
+            '${ply.color == 'w' ? '.' : '...'} '
+            '${ply.san}${_sanSuffix(q)}',
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 15,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Icon(
+                info.icon,
+                size: 16,
+                color: info.color,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                info.label,
+                style: TextStyle(
+                  color: info.color,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                'خسارة تقييم: '
+                '${(loss / 100).toStringAsFixed(2)}',
+                style: TextStyle(
+                  color: Colors.grey.shade700,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+          if (!isBestOrBrilliant &&
+              bestSan.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              'أفضل نقلة: $bestSan',
+              style: const TextStyle(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+          if (pv.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              'الخط الرئيسي: $pv',
+              style: TextStyle(
+                color: Colors.grey.shade700,
+                fontSize: 12,
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -1067,7 +1350,8 @@ class _GameAnalysisScreenState
             ],
             Flexible(
               child: Text(
-                san,
+                '$san'
+                '${q != null ? _sanSuffix(q) : ''}',
                 style: const TextStyle(
                   fontWeight: FontWeight.w600,
                 ),
@@ -1176,7 +1460,7 @@ class _GameAnalysisScreenState
         title: Text(
           'النقلة $moveNumber'
           '${ply.color == 'w' ? '.' : '...'} '
-          '${ply.san}',
+          '${ply.san}${_sanSuffix(q)}',
         ),
         subtitle: Text(
           '${info.label} • خسارة تقييم'
@@ -1240,7 +1524,7 @@ class _GameAnalysisScreenState
             title: Text(
               'النقلة $moveNumber'
               '${ply.color == 'w' ? '.' : '...'} '
-              '${ply.san}',
+              '${ply.san}${_sanSuffix(m.quality)}',
             ),
             subtitle: Text(
               '${info.label} • خسارة تقييم'
@@ -1318,8 +1602,14 @@ class _Eval {
   final double pawns;
   final String label;
   final String bestUci;
+  final List<String> pv;
 
-  const _Eval(this.pawns, this.label, this.bestUci);
+  const _Eval(
+    this.pawns,
+    this.label,
+    this.bestUci,
+    this.pv,
+  );
 }
 
 class _CriticalMoment {
