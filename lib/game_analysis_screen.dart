@@ -40,7 +40,7 @@ class _GameAnalysisScreenState
   final GameState _boardState = GameState();
 
   late final TabController _tabController =
-      TabController(length: 4, vsync: this);
+      TabController(length: 5, vsync: this);
 
   String? _parseError;
 
@@ -722,6 +722,134 @@ class _GameAnalysisScreenState
     return counts;
   }
 
+  /// نفس العدّ لكن مقسّم لكل لاعب — مطلوب لقسم "إحصائيات
+  /// الأبيض والأسود" في تقرير المباراة.
+  Map<String, Map<MoveQuality, int>> get _qualityCountsBySide {
+    final result = {
+      'w': <MoveQuality, int>{},
+      'b': <MoveQuality, int>{},
+    };
+
+    for (var i = 0; i < _qualities.length; i++) {
+      final color = _plies[i].color;
+      final q = _qualities[i];
+      result[color]![q] = (result[color]![q] ?? 0) + 1;
+    }
+
+    return result;
+  }
+
+  /// نقلة "رائعة!!" الأبرز في المباراة (أكبر قيمة تضحية)، أو
+  /// null إن لم توجد أي نقلة رائعة — لا نخترع "أفضل نقلة"
+  /// بديلة بلا معيار حقيقي يميّزها عن عشرات النقلات "الأفضل".
+  int? get _bestMoveIndex {
+    int? best;
+    var bestScore = -1;
+
+    for (var i = 0; i < _qualities.length; i++) {
+      if (_qualities[i] != MoveQuality.brilliant) continue;
+
+      try {
+        final boardBefore = GameState.parseBoard(
+          _plies[i].fenBefore.split(' ').first,
+        );
+
+        final movingPiece =
+            boardBefore[_plies[i].from];
+
+        final movingValue = movingPiece != null &&
+                movingPiece.length == 2
+            ? (pieceValues[movingPiece[1]] ?? 0)
+            : 0;
+
+        if (movingValue > bestScore) {
+          bestScore = movingValue;
+          best = i;
+        }
+      } catch (_) {}
+    }
+
+    return best;
+  }
+
+  /// أسوأ نقلة في المباراة = أكبر خسارة تقييم مُسجَّلة فعليًا.
+  int? get _worstMoveIndex {
+    if (_qualities.isEmpty) return null;
+
+    int? worst;
+    var worstLoss = -1 << 30;
+
+    for (var i = 0; i < _qualities.length; i++) {
+      final loss = _lossAt(i);
+
+      if (loss > worstLoss) {
+        worstLoss = loss;
+        worst = i;
+      }
+    }
+
+    return worstLoss > 0 ? worst : null;
+  }
+
+  /// الفرص الضائعة: فقط النقلات المصنّفة فعليًا miss بناءً على
+  /// معيار محسوب (انهيار أفضلية حاسمة)، وليس تخمينًا.
+  List<int> get _missedOpportunityIndices {
+    final result = <int>[];
+
+    for (var i = 0; i < _qualities.length; i++) {
+      if (_qualities[i] == MoveQuality.miss) {
+        result.add(i);
+      }
+    }
+
+    return result;
+  }
+
+  /// نص ملخّص المباراة — مبني بالكامل من أرقام محسوبة فعليًا
+  /// (قالب نصي، وليس توليدًا بالذكاء الاصطناعي).
+  String get _gameSummaryText {
+    if (_qualities.isEmpty) return '';
+
+    final acc = _accuracyBySide;
+    final worst = _worstMoveIndex;
+
+    final parts = <String>[];
+
+    parts.add(
+      'دقة $_whiteName ${(acc['w'] ?? 0).toStringAsFixed(0)}%'
+      ' مقابل دقة $_blackName'
+      ' ${(acc['b'] ?? 0).toStringAsFixed(0)}%.',
+    );
+
+    if (worst != null) {
+      final ply = _plies[worst];
+      final moveNumber = (worst ~/ 2) + 1;
+      final mover =
+          ply.color == 'w' ? _whiteName : _blackName;
+      final lossPawns =
+          (_lossAt(worst) / 100).toStringAsFixed(1);
+
+      parts.add(
+        'أكبر خطأ في المباراة كان من $mover عند النقلة'
+        ' $moveNumber'
+        '${ply.color == 'w' ? '.' : '...'} '
+        '${ply.san}${_sanSuffix(_qualities[worst])}'
+        ' (خسارة تقييم $lossPawns بيدق تقريبًا).',
+      );
+    }
+
+    final missed = _missedOpportunityIndices;
+
+    if (missed.isNotEmpty) {
+      parts.add(
+        'هناك ${missed.length} فرصة/فرص لم تُستغل بالكامل'
+        ' خلال المباراة.',
+      );
+    }
+
+    return parts.join(' ');
+  }
+
   /// أكبر اللحظات الحرجة (أخطاء/فرص ضائعة) مرتبة تنازليًا حسب
   /// حجم خسارة التقييم.
   List<_CriticalMoment> get _criticalMoments {
@@ -794,6 +922,7 @@ class _GameAnalysisScreenState
           isScrollable: true,
           tabs: const [
             Tab(text: 'نظرة عامة'),
+            Tab(text: 'تقرير المباراة'),
             Tab(text: 'النقلات'),
             Tab(text: 'الأخطاء'),
             Tab(text: 'اللحظات الحرجة'),
@@ -828,6 +957,7 @@ class _GameAnalysisScreenState
                 controller: _tabController,
                 children: [
                   _buildOverviewTab(),
+                  _buildReportTab(),
                   _buildMovesTab(),
                   _buildMistakesTab(),
                   _buildCriticalMomentsTab(),
@@ -1228,6 +1358,509 @@ class _GameAnalysisScreenState
   }
 
   // ------------------------------------------------------------
+  // تبويب: تقرير المباراة
+  // ------------------------------------------------------------
+  //
+  // ملاحظة تصميم مهمة: هذا تبويب ضمن نفس شاشة GameAnalysisScreen
+  // (وليس شاشة منفصلة يُنتقل إليها عبر Navigator) عن قصد — لأن
+  // فتح شاشة GameAnalysisScreen جديدة يعني إعادة تحليل المباراة
+  // بالكامل عبر Stockfish من جديد (initState يبدأ التحليل مباشرة).
+  // بما أن التبويب يشارك نفس الـ State الذي يحمل نتائج التحليل
+  // المحفوظة أصلًا، فإن "الانتقال إلى النقلة" من التقرير لا يحتاج
+  // أكثر من تبديل التبويب + تحديث _currentIndex — بلا أي تحليل
+  // إضافي، تمامًا كما يتطلب القسم 14 من الطلب.
+
+  Map<String, _PhaseStat> get _phaseStatsFull {
+    final result = <String, _PhaseStat>{};
+
+    for (final phase in [
+      'opening',
+      'middlegame',
+      'endgame',
+    ]) {
+      var moveCount = 0;
+      var errorCount = 0;
+      double accSum = 0;
+
+      for (var i = 0; i < _plies.length; i++) {
+        if (_phaseOf(i) != phase) continue;
+
+        moveCount++;
+        accSum += _accuracyAt(i);
+
+        final q = _qualities[i];
+
+        if (q == MoveQuality.mistake ||
+            q == MoveQuality.blunder ||
+            q == MoveQuality.miss) {
+          errorCount++;
+        }
+      }
+
+      result[phase] = _PhaseStat(
+        moveCount: moveCount,
+        accuracy:
+            moveCount > 0 ? accSum / moveCount : 0,
+        errorCount: errorCount,
+      );
+    }
+
+    return result;
+  }
+
+  Widget _buildReportTab() {
+    if (_analyzing) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Text(
+            'التقرير يظهر بعد اكتمال تحليل المباراة...\n'
+            '${(_progress * 100).round()}%',
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
+    }
+
+    if (_plies.isEmpty) {
+      return const Center(
+        child: Text('لا توجد بيانات كافية للتقرير.'),
+      );
+    }
+
+    final acc = _accuracyBySide;
+    final countsBySide = _qualityCountsBySide;
+    final bestIdx = _bestMoveIndex;
+    final worstIdx = _worstMoveIndex;
+    final missed = _missedOpportunityIndices;
+    final opening = _headers['Opening'];
+    final eco = _headers['ECO'];
+
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        // --------------------------------------------------
+        // معلومات المباراة
+        // --------------------------------------------------
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Colors.grey.withOpacity(0.06),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            crossAxisAlignment:
+                CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'تقرير المباراة',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text('الأبيض: $_whiteName'),
+              Text('الأسود: $_blackName'),
+              if (_resultText.isNotEmpty)
+                Text('النتيجة: $_resultText'),
+              Text('عدد النقلات: ${_plies.length}'),
+              if (opening != null)
+                Text('الافتتاح: $opening'
+                    '${eco != null ? ' ($eco)' : ''}')
+              else if (eco != null)
+                Text('رمز الافتتاح (ECO): $eco'),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // --------------------------------------------------
+        // ملخص المباراة
+        // --------------------------------------------------
+        if (_gameSummaryText.isNotEmpty) ...[
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: Theme.of(context)
+                  .colorScheme
+                  .primary
+                  .withOpacity(0.06),
+              borderRadius:
+                  BorderRadius.circular(12),
+            ),
+            child: Column(
+              crossAxisAlignment:
+                  CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'ملخص المباراة',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(_gameSummaryText),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
+
+        // --------------------------------------------------
+        // إحصائيات الأبيض والأسود
+        // --------------------------------------------------
+        const Text(
+          'إحصائيات اللاعبين',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: _playerStatsCard(
+                _whiteName,
+                acc['w'] ?? 0,
+                countsBySide['w']!,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _playerStatsCard(
+                _blackName,
+                acc['b'] ?? 0,
+                countsBySide['b']!,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        // --------------------------------------------------
+        // الرسم البياني للتقييم
+        // --------------------------------------------------
+        const Text(
+          'تقييم المباراة',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        _EvalGraph(
+          evalPawns: _evalPawns,
+          qualities: _qualities,
+          currentIndex: _currentIndex,
+          onSelect: (i) => _jumpAndShowBoard(i),
+        ),
+        const SizedBox(height: 16),
+
+        // --------------------------------------------------
+        // أفضل وأسوأ نقلة
+        // --------------------------------------------------
+        Row(
+          children: [
+            Expanded(
+              child: _bestWorstCard(
+                title: 'أفضل نقلة',
+                icon: Icons.auto_awesome_rounded,
+                color: const Color(0xFF1BADA6),
+                plyIndex: bestIdx,
+                emptyText:
+                    'لا توجد نقلة رائعة بارزة في'
+                    ' هذه المباراة.',
+                buttonText: 'عرض النقلة',
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _bestWorstCard(
+                title: 'أسوأ نقلة',
+                icon: Icons.dangerous_rounded,
+                color: const Color(0xFFD9483D),
+                plyIndex: worstIdx,
+                emptyText:
+                    'لا توجد أخطاء كبيرة في هذه'
+                    ' المباراة.',
+                buttonText: 'عرض على الرقعة',
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        // --------------------------------------------------
+        // أهم الأخطاء (أعلى خسارة تقييم)
+        // --------------------------------------------------
+        const Text(
+          'أهم الأخطاء',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        if (_criticalMoments.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(
+              vertical: 8,
+            ),
+            child: Text('لا توجد أخطاء بارزة تُذكر.'),
+          )
+        else
+          for (final m in _criticalMoments.take(5))
+            _mistakeTile(m.plyIndex),
+        const SizedBox(height: 16),
+
+        // --------------------------------------------------
+        // الفرص الضائعة
+        // --------------------------------------------------
+        const Text(
+          'الفرص الضائعة',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        if (missed.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(
+              vertical: 8,
+            ),
+            child: Text(
+              'لا توجد فرص ضائعة واضحة حسب تحليل'
+              ' Stockfish.',
+            ),
+          )
+        else
+          for (final i in missed) _mistakeTile(i),
+        const SizedBox(height: 16),
+
+        // --------------------------------------------------
+        // مراحل المباراة
+        // --------------------------------------------------
+        const Text(
+          'مراحل المباراة',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        _phaseDetailCard('الافتتاح', 'opening'),
+        const SizedBox(height: 8),
+        _phaseDetailCard('وسط اللعبة', 'middlegame'),
+        const SizedBox(height: 8),
+        _phaseDetailCard('النهايات', 'endgame'),
+        const SizedBox(height: 20),
+      ],
+    );
+  }
+
+  Widget _playerStatsCard(
+    String name,
+    double accuracy,
+    Map<MoveQuality, int> counts,
+  ) {
+    Widget row(MoveQuality q) {
+      final info = moveQualityInfo[q]!;
+      final count = counts[q] ?? 0;
+
+      return Padding(
+        padding: const EdgeInsets.symmetric(
+          vertical: 2,
+        ),
+        child: Row(
+          children: [
+            Icon(info.icon, size: 14, color: info.color),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(
+                info.label,
+                style: const TextStyle(fontSize: 12),
+              ),
+            ),
+            Text(
+              '$count',
+              style: const TextStyle(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.grey.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment:
+            CrossAxisAlignment.start,
+        children: [
+          Text(
+            name,
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '${accuracy.toStringAsFixed(1)}%',
+            style: const TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const Text(
+            'الدقة',
+            style: TextStyle(
+              fontSize: 11,
+              color: Colors.grey,
+            ),
+          ),
+          const Divider(height: 14),
+          row(MoveQuality.excellent),
+          row(MoveQuality.good),
+          row(MoveQuality.inaccuracy),
+          row(MoveQuality.mistake),
+          row(MoveQuality.blunder),
+        ],
+      ),
+    );
+  }
+
+  Widget _bestWorstCard({
+    required String title,
+    required IconData icon,
+    required Color color,
+    required int? plyIndex,
+    required String emptyText,
+    required String buttonText,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: color.withOpacity(0.25),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment:
+            CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 16, color: color),
+              const SizedBox(width: 4),
+              Text(
+                title,
+                style: TextStyle(
+                  color: color,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (plyIndex == null)
+            Text(
+              emptyText,
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey.shade700,
+              ),
+            )
+          else ...[
+            Text(
+              '${(plyIndex ~/ 2) + 1}'
+              '${_plies[plyIndex].color == 'w' ? '.' : '...'} '
+              '${_plies[plyIndex].san}'
+              '${_sanSuffix(_qualities[plyIndex])}',
+              style: const TextStyle(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            Text(
+              'خسارة تقييم: '
+              '${(_lossAt(plyIndex) / 100).toStringAsFixed(2)}',
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey.shade700,
+              ),
+            ),
+            const SizedBox(height: 6),
+            SizedBox(
+              height: 34,
+              child: OutlinedButton(
+                onPressed: () => _jumpAndShowBoard(
+                  plyIndex + 1,
+                ),
+                child: Text(buttonText),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _phaseDetailCard(String label, String phaseKey) {
+    final stat = _phaseStatsFull[phaseKey]!;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.grey.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 2,
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              '${stat.moveCount} نقلة',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.grey.shade700,
+                fontSize: 12,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              'دقة ${stat.accuracy.toStringAsFixed(0)}%',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              'أخطاء: ${stat.errorCount}',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: stat.errorCount > 0
+                    ? const Color(0xFFD9483D)
+                    : Colors.grey.shade700,
+                fontSize: 12,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ------------------------------------------------------------
   // تبويب: النقلات
   // ------------------------------------------------------------
 
@@ -1622,4 +2255,212 @@ class _CriticalMoment {
     required this.quality,
     required this.lossCp,
   });
+}
+
+class _PhaseStat {
+  final int moveCount;
+  final double accuracy;
+  final int errorCount;
+
+  const _PhaseStat({
+    required this.moveCount,
+    required this.accuracy,
+    required this.errorCount,
+  });
+}
+
+// ================================================================
+// الرسم البياني للتقييم — مرسوم يدويًا (CustomPainter) بدون أي
+// مكتبة خارجية، مع دعم الضغط لأقرب نقطة نقلة كما طُلب صراحة.
+// ================================================================
+
+class _EvalGraph extends StatelessWidget {
+  final List<double> evalPawns;
+  final List<MoveQuality> qualities;
+  final int currentIndex;
+  final void Function(int index) onSelect;
+
+  const _EvalGraph({
+    required this.evalPawns,
+    required this.qualities,
+    required this.currentIndex,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (evalPawns.length < 2) {
+      return const SizedBox(
+        height: 120,
+        child: Center(
+          child: Text('لا توجد بيانات كافية للرسم.'),
+        ),
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        const height = 140.0;
+
+        void handleTap(Offset local) {
+          final dx = local.dx.clamp(0, width);
+
+          final idx = width <= 0
+              ? 0
+              : (dx / width * (evalPawns.length - 1))
+                  .round()
+                  .clamp(0, evalPawns.length - 1);
+
+          onSelect(idx);
+        }
+
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapUp: (d) =>
+              handleTap(d.localPosition),
+          onHorizontalDragUpdate: (d) =>
+              handleTap(d.localPosition),
+          child: CustomPaint(
+            size: Size(width, height),
+            painter: _EvalGraphPainter(
+              evalPawns: evalPawns,
+              qualities: qualities,
+              currentIndex: currentIndex,
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _EvalGraphPainter extends CustomPainter {
+  final List<double> evalPawns;
+  final List<MoveQuality> qualities;
+  final int currentIndex;
+
+  const _EvalGraphPainter({
+    required this.evalPawns,
+    required this.qualities,
+    required this.currentIndex,
+  });
+
+  static const double _cap = 5.0;
+
+  double _xAt(int i, int n, double width) =>
+      n <= 1 ? 0 : (i / (n - 1)) * width;
+
+  double _yAt(double pawns, double height) {
+    final clamped = pawns.clamp(-_cap, _cap);
+    final mid = height / 2;
+    return mid - (clamped / _cap) * mid;
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final n = evalPawns.length;
+
+    if (n < 2) return;
+
+    final mid = size.height / 2;
+
+    // الخلفية: نصف فاتح (أبيض أفضل) ونصف غامق (أسود أفضل).
+    final whiteBg = Paint()
+      ..color = Colors.grey.withOpacity(0.08);
+    final blackBg = Paint()
+      ..color = Colors.grey.withOpacity(0.18);
+
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, mid),
+      whiteBg,
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(0, mid, size.width, mid),
+      blackBg,
+    );
+
+    final zeroPaint = Paint()
+      ..color = Colors.grey.withOpacity(0.5)
+      ..strokeWidth = 1;
+
+    canvas.drawLine(
+      Offset(0, mid),
+      Offset(size.width, mid),
+      zeroPaint,
+    );
+
+    // خط التقييم.
+    final path = Path();
+
+    path.moveTo(
+      _xAt(0, n, size.width),
+      _yAt(evalPawns[0], size.height),
+    );
+
+    for (var i = 1; i < n; i++) {
+      path.lineTo(
+        _xAt(i, n, size.width),
+        _yAt(evalPawns[i], size.height),
+      );
+    }
+
+    final linePaint = Paint()
+      ..color = Colors.indigo
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2;
+
+    canvas.drawPath(path, linePaint);
+
+    // نقاط ملوّنة عند الأخطاء/الفرص الضائعة.
+    for (var i = 0; i < qualities.length; i++) {
+      final q = qualities[i];
+
+      if (q == MoveQuality.blunder ||
+          q == MoveQuality.mistake ||
+          q == MoveQuality.miss) {
+        final color = moveQualityInfo[q]!.color;
+
+        canvas.drawCircle(
+          Offset(
+            _xAt(i + 1, n, size.width),
+            _yAt(evalPawns[i + 1], size.height),
+          ),
+          3.5,
+          Paint()..color = color,
+        );
+      }
+    }
+
+    // مؤشر الموضع الحالي.
+    if (currentIndex >= 0 && currentIndex < n) {
+      final x = _xAt(currentIndex, n, size.width);
+
+      canvas.drawLine(
+        Offset(x, 0),
+        Offset(x, size.height),
+        Paint()
+          ..color = Colors.red.withOpacity(0.4)
+          ..strokeWidth = 1,
+      );
+
+      canvas.drawCircle(
+        Offset(
+          x,
+          _yAt(evalPawns[currentIndex], size.height),
+        ),
+        4.5,
+        Paint()..color = Colors.red,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(
+    covariant _EvalGraphPainter oldDelegate,
+  ) {
+    return oldDelegate.currentIndex != currentIndex ||
+        oldDelegate.evalPawns != evalPawns ||
+        oldDelegate.qualities != qualities;
+  }
 }
