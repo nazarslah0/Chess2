@@ -80,6 +80,11 @@ jobs:
             --project-name chess \
             .
 
+          # flutter create يولّد test/widget_test.dart يستورد
+          # package:chess/main.dart و MyApp وهما غير موجودين في هذا
+          # المشروع (اسم الحزمة chess_analyzer) فيفشل flutter analyze.
+          rm -f test/widget_test.dart
+
       # =========================================================
       # Configure Android native library packaging
       # =========================================================
