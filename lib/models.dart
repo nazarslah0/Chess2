@@ -165,7 +165,7 @@ const PieceTheme chessComPieceTheme = PieceTheme(
   whiteStroke: Color(0xFF555555),
   blackFill: Color(0xFF333333),
   blackStroke: Color(0xFFD8D8D8),
-  assetFolder: 'chesscom',
+  assetFolder: 'Chesscom',
 );
 
 /// ============================================================

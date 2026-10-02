@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:chess/chess.dart' as ch;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'models.dart';
 import 'engine_service.dart';
@@ -87,6 +89,17 @@ class _GameAnalysisScreenState
   bool _analyzing = false;
   bool _cancelled = false;
   bool _cancelRequested = false;
+
+  // خيارات العرض (قائمة الخيارات).
+  bool _showArrows = true;
+  bool _showEval = true;
+  bool _showCoords = true;
+
+  // شريط النقلات الأفقي + نافذة المراجعة.
+  final ScrollController _stripCtrl = ScrollController();
+  final Map<int, GlobalKey> _stripKeys = <int, GlobalKey>{};
+  final ValueNotifier<int> _sheetTick = ValueNotifier<int>(0);
+  bool _sheetOpen = false;
   bool _servedFromCache = false;
   double _progress = 0;
   int _analyzedCount = 0;
@@ -180,10 +193,20 @@ class _GameAnalysisScreenState
   }
 
   @override
+  void setState(VoidCallback fn) {
+    super.setState(fn);
+
+    // يُحدّث محتوى نافذة المراجعة المفتوحة أثناء التحليل.
+    _sheetTick.value++;
+  }
+
+  @override
   void dispose() {
     _engine.dispose();
     _boardState.dispose();
     _tabController.dispose();
+    _stripCtrl.dispose();
+    _sheetTick.dispose();
     super.dispose();
   }
 
@@ -660,6 +683,8 @@ class _GameAnalysisScreenState
     });
 
     _boardState.loadFen(_fens[clamped]);
+
+    _scrollStripToCurrent();
   }
 
   /// ينتقل إلى النقلة رقم [index] ويحوّل التبويب إلى "نظرة
@@ -667,7 +692,11 @@ class _GameAnalysisScreenState
   /// الأخطاء واللحظات الحرجة).
   void _jumpAndShowBoard(int index) {
     _goTo(index);
-    _tabController.animateTo(0);
+
+    if (_sheetOpen && mounted) {
+      _sheetOpen = false;
+      Navigator.of(context).pop();
+    }
   }
 
   BoardArrow _decodeArrow(String uci, Color color) {
@@ -1183,329 +1212,789 @@ class _GameAnalysisScreenState
   // Build
   // ============================================================
 
+  // ============================================================
+  // واجهة بأسلوب تطبيق Chess.com — شاشة واحدة
+  // ============================================================
+
+  static const Color _bg = Color(0xFF312E2B);
+  static const Color _panel = Color(0xFF262522);
+  static const Color _green = Color(0xFF81B64C);
+
+  ThemeData _darkTheme() {
+    return ThemeData(
+      useMaterial3: true,
+      brightness: Brightness.dark,
+      colorSchemeSeed: _green,
+      scaffoldBackgroundColor: _bg,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_parseError != null) {
-      return Scaffold(
-        appBar: AppBar(
-          title: const Text('تحليل المباراة'),
-        ),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Text(
-              _parseError!,
-              textAlign: TextAlign.center,
+      return Theme(
+        data: _darkTheme(),
+        child: Scaffold(
+          appBar: AppBar(
+            title: const Text('تحليل المباراة'),
+          ),
+          body: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Text(
+                _parseError!,
+                textAlign: TextAlign.center,
+              ),
             ),
           ),
         ),
       );
     }
 
-    return Scaffold(
-      backgroundColor: const Color(0xFF312E2B),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF262522),
-        foregroundColor: Colors.white,
-        title: Text('$_whiteName ضد $_blackName'),
-        actions: [
-          IconButton(
-            tooltip: 'قلب الرقعة',
-            icon: const Icon(
-              Icons.swap_vert_rounded,
-            ),
-            onPressed: () {
-              setState(() {
-                _boardState.flipBoard();
-              });
+    final topColor = _boardState.flipped ? 'w' : 'b';
+    final bottomColor = _boardState.flipped ? 'b' : 'w';
+
+    return Theme(
+      data: _darkTheme(),
+      child: Scaffold(
+        backgroundColor: _bg,
+        body: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, c) {
+              // الأجزاء الثابتة: الشريط العلوي + النقلات + التقييم
+              // + لاعبان + الشريط السفلي + حد أدنى للمعلومات.
+              const fixed = 52 + 46 + 16 + 120 + 78 + 70;
+
+              final side = math.min(
+                c.maxWidth,
+                math.max(180.0, c.maxHeight - fixed),
+              );
+
+              return Column(
+                children: [
+                  _buildTopBar(),
+                  _buildMoveStrip(),
+                  if (_showEval) _buildEvalStrip(),
+                  _buildPlayerBar(topColor),
+                  Center(
+                    child: SizedBox(
+                      width: side,
+                      height: side,
+                      child: _buildBoard(),
+                    ),
+                  ),
+                  _buildPlayerBar(bottomColor),
+                  Expanded(child: _buildInfoPanel()),
+                  _buildBottomBar(),
+                ],
+              );
             },
           ),
-        ],
-        bottom: TabBar(
-          controller: _tabController,
-          isScrollable: true,
-          labelColor: const Color(0xFF9BCB4A),
-          unselectedLabelColor: Colors.white70,
-          indicatorColor: const Color(0xFF9BCB4A),
-          tabs: const [
-            Tab(text: 'نظرة عامة'),
-            Tab(text: 'تقرير المباراة'),
-            Tab(text: 'النقلات'),
-            Tab(text: 'الأخطاء'),
-            Tab(text: 'اللحظات الحرجة'),
-          ],
-        ),
-      ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            if (_analyzing)
-              LinearProgressIndicator(
-                value: _progress,
-              ),
-            if (_analyzing)
-              Padding(
-                padding:
-                    const EdgeInsets.symmetric(
-                  vertical: 6,
-                  horizontal: 10,
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'جارٍ تحليل المباراة... '
-                        'النقلة $_analyzedCount من'
-                        ' ${_fens.length}'
-                        ' (${(_progress * 100).round()}%)',
-                        style: Theme.of(context)
-                            .textTheme
-                            .bodySmall,
-                      ),
-                    ),
-                    TextButton.icon(
-                      onPressed: _cancelAnalysis,
-                      icon: const Icon(
-                        Icons.cancel_outlined,
-                        size: 18,
-                      ),
-                      label: const Text('إلغاء'),
-                    ),
-                  ],
-                ),
-              ),
-            if (_cancelled)
-              Padding(
-                padding:
-                    const EdgeInsets.symmetric(
-                  vertical: 6,
-                  horizontal: 10,
-                ),
-                child: Text(
-                  'تم إلغاء التحليل عند النقلة'
-                  ' $_analyzedCount من ${_fens.length}.'
-                  ' النتائج قبل هذه النقطة محفوظة'
-                  ' ومتاحة، والباقي غير محلَّل.',
-                  style: TextStyle(
-                    color: Colors.orange.shade800,
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-            Expanded(
-              child: TabBarView(
-                controller: _tabController,
-                children: [
-                  _buildOverviewTab(),
-                  _buildReportTab(),
-                  _buildMovesTab(),
-                  _buildMistakesTab(),
-                  _buildCriticalMomentsTab(),
-                ],
-              ),
-            ),
-          ],
         ),
       ),
     );
   }
 
-  // ------------------------------------------------------------
-  // تبويب: نظرة عامة
-  // ------------------------------------------------------------
-
-  Widget _buildOverviewTab() {
-    final hasEval = _evalPawns.isNotEmpty;
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(0, 0, 0, 18),
-      child: Column(
+  Widget _buildTopBar() {
+    return Container(
+      height: 52,
+      color: _bg,
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      child: Row(
         children: [
-          _buildChessComPlayerBar(
-            name: _blackName,
-            pieceColor: 'b',
-            active: _currentIndex > 0 &&
-                _plies.isNotEmpty &&
-                _plies[_currentIndex - 1].color == 'b',
-          ),
-          if (_servedFromCache)
-            Container(
-              width: double.infinity,
-              margin: const EdgeInsets.only(
-                bottom: 8,
-              ),
-              padding: const EdgeInsets.symmetric(
-                vertical: 6,
-                horizontal: 10,
-              ),
-              decoration: BoxDecoration(
-                color: Colors.green.withValues(alpha: 0.08),
-                borderRadius:
-                    BorderRadius.circular(8),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.bolt_rounded,
-                    size: 16,
-                    color: Colors.green.shade700,
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    'نتائج محفوظة من تحليل سابق لهذه'
-                    ' المباراة — لم يُعَد تشغيل'
-                    ' Stockfish.',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: Colors.green.shade800,
-                    ),
-                  ),
-                ],
-              ),
+          IconButton(
+            onPressed: () => Navigator.of(context).maybePop(),
+            icon: const Icon(
+              Icons.arrow_back_rounded,
+              textDirection: TextDirection.ltr,
+              color: Colors.white70,
+              size: 30,
             ),
-          if (_resultText.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(
-                bottom: 8,
-              ),
+          ),
+          Expanded(
+            child: Center(
               child: Text(
-                _resultText,
+                widget.sourceLabel.isEmpty
+                    ? 'تحليل المباراة'
+                    : widget.sourceLabel,
                 style: const TextStyle(
-                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                  fontSize: 24,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.5,
                 ),
               ),
             ),
-          Row(
-            crossAxisAlignment:
-                CrossAxisAlignment.start,
-            children: [
-              _EvalBar(
-                pawns: hasEval
-                    ? _evalPawns[_currentIndex]
-                    : 0,
-                label: hasEval
-                    ? _evalLabels[_currentIndex]
-                    : '0.00',
+          ),
+          SizedBox(
+            width: 48,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                _resultText,
+                textDirection: TextDirection.ltr,
+                style: const TextStyle(
+                  color: Colors.white54,
+                  fontSize: 12,
+                ),
               ),
-              const SizedBox(width: 5),
-              Expanded(
-                child: AspectRatio(
-                  aspectRatio: 1,
-                  // سحب يمين/يسار للتنقل بين النقلات، دون
-                  // التعارض مع تحريك القطع (الرقعة هنا للعرض
-                  // فقط عبر interactive: false).
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onHorizontalDragEnd: (details) {
-                      final v = details
-                          .primaryVelocity;
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
-                      if (v == null) return;
+  // ---------------- شريط النقلات الأفقي ----------------
 
-                      // سحب لليسار (سرعة سالبة) = النقلة
-                      // التالية، كتقليب صفحة إلى الأمام.
-                      if (v < -150) {
-                        _goTo(_currentIndex + 1);
-                      } else if (v > 150) {
-                        _goTo(_currentIndex - 1);
-                      }
-                    },
-                    child: BoardWidget(
-                      state: _boardState,
-                      boardTheme: chessComBoardTheme,
-                      pieceTheme: chessComPieceTheme,
-                      onTap: (_) {},
-                      arrows: _arrowsForCurrent(),
-                      interactive: false,
-                    ),
-                  ),
+  void _scrollStripToCurrent() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+
+      if (_currentIndex <= 0) {
+        if (_stripCtrl.hasClients) {
+          _stripCtrl.animateTo(
+            0,
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+          );
+        }
+        return;
+      }
+
+      final ctx = _stripKeys[_currentIndex]?.currentContext;
+
+      if (ctx != null) {
+        Scrollable.ensureVisible(
+          ctx,
+          alignment: 0.5,
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  Widget _buildMoveStrip() {
+    final items = <Widget>[];
+
+    for (var i = 0; i < _plies.length; i += 2) {
+      items.add(
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          child: Text(
+            '.${(i ~/ 2) + 1}',
+            textDirection: TextDirection.ltr,
+            style: const TextStyle(
+              color: Colors.white38,
+              fontSize: 15,
+            ),
+          ),
+        ),
+      );
+
+      items.add(_stripMove(i));
+
+      if (i + 1 < _plies.length) {
+        items.add(_stripMove(i + 1));
+      }
+    }
+
+    return Container(
+      height: 46,
+      color: _panel,
+      child: SingleChildScrollView(
+        controller: _stripCtrl,
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Row(children: items),
+      ),
+    );
+  }
+
+  Widget _stripMove(int k) {
+    final ply = _plies[k];
+    final selected = _currentIndex == k + 1;
+    final key = _stripKeys.putIfAbsent(k + 1, () => GlobalKey());
+
+    final q = k < _qualities.length ? _qualities[k] : null;
+
+    Color textColor = Colors.white;
+
+    if (q == MoveQuality.brilliant ||
+        q == MoveQuality.blunder ||
+        q == MoveQuality.mistake ||
+        q == MoveQuality.miss ||
+        q == MoveQuality.inaccuracy) {
+      textColor = moveQualityInfo[q]!.color;
+    }
+
+    final first = ply.san.isEmpty ? '' : ply.san[0];
+    final hasFigurine = 'KQRBN'.contains(first) && first.isNotEmpty;
+
+    return GestureDetector(
+      key: key,
+      behavior: HitTestBehavior.opaque,
+      onTap: () => _goTo(k + 1),
+      child: Container(
+        margin: const EdgeInsets.symmetric(
+          horizontal: 2,
+          vertical: 7,
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        decoration: BoxDecoration(
+          color: selected
+              ? const Color(0xFF5A5856)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Directionality(
+          textDirection: TextDirection.ltr,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (hasFigurine) ...[
+                Image.asset(
+                  chessComPieceTheme.assetPath(ply.color, first),
+                  width: 20,
+                  height: 20,
+                ),
+                const SizedBox(width: 2),
+              ],
+              Text(
+                hasFigurine ? ply.san.substring(1) : ply.san,
+                style: TextStyle(
+                  color: textColor,
+                  fontSize: 17,
+                  fontWeight: selected
+                      ? FontWeight.w800
+                      : FontWeight.w600,
                 ),
               ),
             ],
           ),
-          _buildChessComPlayerBar(
-            name: _whiteName,
-            pieceColor: 'w',
-            active: _currentIndex > 0 &&
-                _plies.isNotEmpty &&
-                _plies[_currentIndex - 1].color == 'w',
-          ),
-          const SizedBox(height: 8),
-          _buildNavControls(),
-          if (_fens.length > 1)
-            Slider(
-              value: _currentIndex.toDouble(),
-              min: 0,
-              max: (_fens.length - 1).toDouble(),
-              divisions: _fens.length - 1,
-              label: '$_currentIndex',
-              onChanged: (v) => _goTo(v.round()),
-            ),
-          const SizedBox(height: 4),
-          if (!_analyzing && _plies.isNotEmpty)
-            _buildCurrentMoveInfo(),
-          const SizedBox(height: 12),
-          if (!_analyzing && _qualities.isNotEmpty)
-            _buildAccuracySummary(),
-          const SizedBox(height: 12),
-          if (!_analyzing && _qualities.isNotEmpty)
-            _buildPhaseSummary(),
-        ],
+        ),
       ),
     );
   }
 
-  Widget _buildChessComPlayerBar({
-    required String name,
-    required String pieceColor,
-    required bool active,
-  }) {
-    final isBlack = pieceColor == 'b';
-    final bg = active ? const Color(0xFF3A3937) : const Color(0xFF2B2927);
+  // ---------------- شريط التقييم الأفقي ----------------
+
+  Widget _buildEvalStrip() {
+    final hasEval = _evalPawns.isNotEmpty;
+
+    final pawns = hasEval ? _evalPawns[_currentIndex] : 0.0;
+    final label = hasEval ? _evalLabels[_currentIndex] : '0.00';
+
+    final frac = ((pawns.clamp(-8.0, 8.0) + 8.0) / 16.0)
+        .clamp(0.0, 1.0)
+        .toDouble();
+
+    final whiteBetter = frac >= 0.5;
+
+    return Directionality(
+      textDirection: TextDirection.ltr,
+      child: SizedBox(
+        height: 16,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: Container(color: const Color(0xFF403D39)),
+            ),
+            Positioned.fill(
+              child: FractionallySizedBox(
+                alignment: Alignment.centerLeft,
+                widthFactor: frac,
+                child: Container(color: Colors.white),
+              ),
+            ),
+            Positioned.fill(
+              child: Align(
+                alignment: whiteBetter
+                    ? Alignment.centerLeft
+                    : Alignment.centerRight,
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6),
+                  child: Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                      color: whiteBetter
+                          ? const Color(0xFF2B2B2B)
+                          : Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ---------------- الرقعة ----------------
+
+  Widget _buildBoard() {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      // سحب يمين/يسار للتنقل بين النقلات.
+      onHorizontalDragEnd: (details) {
+        final v = details.primaryVelocity;
+
+        if (v == null) return;
+
+        if (v < -150) {
+          _goTo(_currentIndex + 1);
+        } else if (v > 150) {
+          _goTo(_currentIndex - 1);
+        }
+      },
+      child: BoardWidget(
+        state: _boardState,
+        boardTheme: chessComBoardTheme,
+        pieceTheme: chessComPieceTheme,
+        onTap: (_) {},
+        arrows: _showArrows
+            ? _arrowsForCurrent()
+            : const <BoardArrow>[],
+        showCoordinates: _showCoords,
+        interactive: false,
+      ),
+    );
+  }
+
+  // ---------------- شريط اللاعب ----------------
+
+  Widget _buildPlayerBar(String color) {
+    final isWhite = color == 'w';
+
+    final name = isWhite ? _whiteName : _blackName;
+    final elo = _headers[isWhite ? 'WhiteElo' : 'BlackElo'];
+
+    final fenParts = _fens[_currentIndex].split(' ');
+    final toMove = fenParts.length > 1 ? fenParts[1] : 'w';
+    final active = toMove == color;
+
+    final acc = _qualities.isNotEmpty
+        ? _accuracyBySide[color]
+        : null;
+
+    final title = (elo != null && elo.isNotEmpty && elo != '?')
+        ? '($elo) $name'
+        : name;
+
     return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      color: bg,
+      color: _bg,
+      padding: const EdgeInsets.symmetric(
+        horizontal: 12,
+        vertical: 8,
+      ),
       child: Row(
         children: [
           Container(
-            width: 40,
-            height: 40,
+            width: 44,
+            height: 44,
+            padding: const EdgeInsets.all(3),
             decoration: BoxDecoration(
-              color: isBlack ? const Color(0xFF555351) : Colors.white,
-              borderRadius: BorderRadius.circular(5),
+              color: isWhite
+                  ? const Color(0xFFE8E8E8)
+                  : const Color(0xFF5A5856),
+              borderRadius: BorderRadius.circular(4),
             ),
-            padding: const EdgeInsets.all(4),
             child: Image.asset(
-              isBlack
-                  ? 'assets/pieces/chesscom/bP.webp'
-                  : 'assets/pieces/chesscom/wP.webp',
+              chessComPieceTheme.assetPath(color, 'P'),
               fit: BoxFit.contain,
             ),
           ),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              name,
+              title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
+              textDirection: TextDirection.ltr,
+              textAlign: TextAlign.right,
               style: TextStyle(
-                color: Colors.white,
-                fontSize: 15,
-                fontWeight: active ? FontWeight.w800 : FontWeight.w600,
+                color: Colors.white.withValues(alpha: 0.9),
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
               ),
             ),
           ),
-          if (active)
-            const Icon(
-              Icons.circle,
-              size: 8,
-              color: Color(0xFF9BCB4A),
+          const SizedBox(width: 10),
+          Container(
+            width: 92,
+            height: 46,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: active
+                  ? const Color(0xFF1F1E1C)
+                  : const Color(0xFF5F5E5C),
+              borderRadius: BorderRadius.circular(5),
             ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  acc == null ? '—' : '${acc.toStringAsFixed(0)}%',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const Text(
+                  'الدقة',
+                  style: TextStyle(
+                    color: Colors.white54,
+                    fontSize: 10,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
   }
+
+  // ---------------- لوحة المعلومات تحت الرقعة ----------------
+
+  Widget _buildInfoPanel() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+      child: Column(
+        children: [
+          if (_analyzing) ...[
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'جارٍ تحليل المباراة... '
+                    '$_analyzedCount من ${_fens.length}'
+                    ' (${(_progress * 100).round()}%)',
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: _cancelAnalysis,
+                  child: const Text('إلغاء'),
+                ),
+              ],
+            ),
+            LinearProgressIndicator(
+              value: _progress,
+              color: _green,
+              backgroundColor: const Color(0xFF3A3937),
+            ),
+            const SizedBox(height: 8),
+          ],
+          if (_cancelled)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                'تم إلغاء التحليل عند النقلة $_analyzedCount'
+                ' من ${_fens.length}. النتائج قبل هذه النقطة'
+                ' محفوظة، والباقي غير محلَّل.',
+                style: TextStyle(
+                  color: Colors.orange.shade300,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          if (_servedFromCache && !_analyzing)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.bolt_rounded,
+                    size: 16,
+                    color: Colors.green.shade300,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'نتائج محفوظة من تحليل سابق لهذه المباراة.',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.green.shade300,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          if (!_analyzing && _plies.isNotEmpty)
+            _buildCurrentMoveInfo(),
+        ],
+      ),
+    );
+  }
+
+  // ---------------- الشريط السفلي ----------------
+
+  Widget _buildBottomBar() {
+    final atStart = _currentIndex <= 0;
+    final atEnd = _currentIndex >= _fens.length - 1;
+
+    return Container(
+      color: _bg,
+      padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: _BarButton(
+              icon: Icons.format_list_bulleted_rounded,
+              label: 'الخيارات',
+              onTap: _openOptions,
+            ),
+          ),
+          Expanded(
+            child: Center(
+              child: Material(
+                color: _green,
+                borderRadius: BorderRadius.circular(14),
+                elevation: 3,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(14),
+                  onTap: _openReview,
+                  child: const SizedBox(
+                    width: 70,
+                    height: 58,
+                    child: Icon(
+                      Icons.star_rounded,
+                      color: Colors.white,
+                      size: 38,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: _BarButton(
+              icon: Icons.chevron_left_rounded,
+              label: 'رجوع',
+              enabled: !atStart,
+              repeat: true,
+              onTap: () => _goTo(_currentIndex - 1),
+            ),
+          ),
+          Expanded(
+            child: _BarButton(
+              icon: Icons.chevron_right_rounded,
+              label: 'تقدّم',
+              enabled: !atEnd,
+              repeat: true,
+              onTap: () => _goTo(_currentIndex + 1),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ---------------- قائمة الخيارات ----------------
+
+  void _openOptions() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: _panel,
+      builder: (ctx) {
+        return Theme(
+          data: _darkTheme(),
+          child: StatefulBuilder(
+            builder: (ctx, setSheet) {
+              return SafeArea(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const SizedBox(height: 8),
+                    ListTile(
+                      leading: const Icon(Icons.swap_vert_rounded),
+                      title: const Text('قلب الرقعة'),
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        setState(() {
+                          _boardState.flipBoard();
+                        });
+                      },
+                    ),
+                    SwitchListTile(
+                      secondary:
+                          const Icon(Icons.arrow_right_alt_rounded),
+                      title: const Text('إظهار الأسهم'),
+                      value: _showArrows,
+                      onChanged: (v) {
+                        setSheet(() {});
+                        setState(() {
+                          _showArrows = v;
+                        });
+                      },
+                    ),
+                    SwitchListTile(
+                      secondary: const Icon(Icons.align_vertical_center),
+                      title: const Text('إظهار شريط التقييم'),
+                      value: _showEval,
+                      onChanged: (v) {
+                        setSheet(() {});
+                        setState(() {
+                          _showEval = v;
+                        });
+                      },
+                    ),
+                    SwitchListTile(
+                      secondary: const Icon(Icons.grid_on_rounded),
+                      title: const Text('إظهار إحداثيات الرقعة'),
+                      value: _showCoords,
+                      onChanged: (v) {
+                        setSheet(() {});
+                        setState(() {
+                          _showCoords = v;
+                        });
+                      },
+                    ),
+                    ListTile(
+                      leading: const Icon(Icons.copy_rounded),
+                      title: const Text('نسخ PGN'),
+                      onTap: () {
+                        Clipboard.setData(
+                          ClipboardData(text: widget.pgn),
+                        );
+                        Navigator.pop(ctx);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('تم نسخ PGN'),
+                          ),
+                        );
+                      },
+                    ),
+                    if (_analyzing)
+                      ListTile(
+                        leading: const Icon(Icons.cancel_outlined),
+                        title: const Text('إلغاء التحليل'),
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          _cancelAnalysis();
+                        },
+                      ),
+                    const SizedBox(height: 8),
+                  ],
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  // ---------------- مراجعة المباراة (النجمة الخضراء) ----------------
+
+  Future<void> _openReview() async {
+    _sheetOpen = true;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _panel,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(16),
+        ),
+      ),
+      builder: (ctx) {
+        final h = MediaQuery.of(ctx).size.height * 0.88;
+
+        return Theme(
+          data: _darkTheme(),
+          child: ListenableBuilder(
+            listenable: _sheetTick,
+            builder: (ctx, _) {
+              return SizedBox(
+                height: h,
+                child: Column(
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 4,
+                      margin: const EdgeInsets.symmetric(vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.white24,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                    TabBar(
+                      controller: _tabController,
+                      isScrollable: true,
+                      tabAlignment: TabAlignment.start,
+                      labelColor: _green,
+                      unselectedLabelColor: Colors.white70,
+                      indicatorColor: _green,
+                      tabs: const [
+                        Tab(text: 'ملخص'),
+                        Tab(text: 'تقرير المباراة'),
+                        Tab(text: 'النقلات'),
+                        Tab(text: 'الأخطاء'),
+                        Tab(text: 'اللحظات الحرجة'),
+                      ],
+                    ),
+                    Expanded(
+                      child: TabBarView(
+                        controller: _tabController,
+                        children: [
+                          _buildSummaryTab(),
+                          _buildReportTab(),
+                          _buildMovesTab(),
+                          _buildMistakesTab(),
+                          _buildCriticalMomentsTab(),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+
+    _sheetOpen = false;
+  }
+
+  Widget _buildSummaryTab() {
+    if (_analyzing || _qualities.isEmpty) {
+      return Center(
+        child: Text(
+          _analyzing
+              ? 'جارٍ تحليل المباراة...'
+              : 'لا توجد نتائج تحليل بعد.',
+          style: const TextStyle(color: Colors.white70),
+        ),
+      );
+    }
+
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        _buildAccuracySummary(),
+        const SizedBox(height: 12),
+        _buildPhaseSummary(),
+      ],
+    );
+  }
+
+  // ------------------------------------------------------------
+  // تبويب: نظرة عامة
+  // ------------------------------------------------------------
 
   Widget _buildCurrentMoveInfo() {
     if (_currentIndex == 0) {
@@ -1535,7 +2024,7 @@ class _GameAnalysisScreenState
               Text(
                 'الخط المقترح: $pv',
                 style: TextStyle(
-                  color: Colors.grey.shade700,
+                  color: Colors.white70,
                   fontSize: 13,
                 ),
               ),
@@ -1617,7 +2106,7 @@ class _GameAnalysisScreenState
                 'خسارة تقييم: '
                 '${(loss / 100).toStringAsFixed(2)}',
                 style: TextStyle(
-                  color: Colors.grey.shade700,
+                  color: Colors.white70,
                   fontSize: 12,
                 ),
               ),
@@ -1638,126 +2127,12 @@ class _GameAnalysisScreenState
             Text(
               'الخط الرئيسي: $pv',
               style: TextStyle(
-                color: Colors.grey.shade700,
+                color: Colors.white70,
                 fontSize: 12,
               ),
             ),
           ],
         ],
-      ),
-    );
-  }
-
-  Widget _buildNavControls() {
-    final atStart = _currentIndex <= 0;
-    final atEnd = _currentIndex >= _fens.length - 1;
-
-    final scheme = Theme.of(context).colorScheme;
-
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        _navButton(
-          icon: Icons.skip_previous_rounded,
-          tooltip: 'البداية',
-          enabled: !atStart,
-          onPressed: () => _goTo(0),
-          scheme: scheme,
-        ),
-        const SizedBox(width: 6),
-        _navButton(
-          icon: Icons.navigate_before_rounded,
-          tooltip: 'السابقة',
-          enabled: !atStart,
-          onPressed: () => _goTo(_currentIndex - 1),
-          scheme: scheme,
-          primary: true,
-        ),
-        Container(
-          margin: const EdgeInsets.symmetric(
-            horizontal: 10,
-          ),
-          padding: const EdgeInsets.symmetric(
-            horizontal: 14,
-            vertical: 8,
-          ),
-          decoration: BoxDecoration(
-            color: scheme.primary.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Text(
-            '$_currentIndex / '
-            '${_fens.isEmpty ? 0 : _fens.length - 1}',
-            style: const TextStyle(
-              fontWeight: FontWeight.bold,
-              fontSize: 15,
-            ),
-          ),
-        ),
-        _navButton(
-          icon: Icons.navigate_next_rounded,
-          tooltip: 'التالية',
-          enabled: !atEnd,
-          onPressed: () => _goTo(_currentIndex + 1),
-          scheme: scheme,
-          primary: true,
-        ),
-        const SizedBox(width: 6),
-        _navButton(
-          icon: Icons.skip_next_rounded,
-          tooltip: 'النهاية',
-          enabled: !atEnd,
-          onPressed: () => _goTo(_fens.length - 1),
-          scheme: scheme,
-        ),
-      ],
-    );
-  }
-
-  /// زر تنقل دائري له خلفية واضحة دائمًا (حتى عند التعطيل)،
-  /// بدل IconButton العادي الذي يصبح شبه شفاف عند التعطيل
-  /// ويعطي انطباعًا بأن الزر "اختفى".
-  Widget _navButton({
-    required IconData icon,
-    required String tooltip,
-    required bool enabled,
-    required VoidCallback onPressed,
-    required ColorScheme scheme,
-    bool primary = false,
-  }) {
-    final size = primary ? 48.0 : 40.0;
-    final iconSize = primary ? 28.0 : 22.0;
-
-    final bgColor = !enabled
-        ? scheme.onSurface.withValues(alpha: 0.06)
-        : primary
-            ? scheme.primary
-            : scheme.primary.withValues(alpha: 0.12);
-
-    final iconColor = !enabled
-        ? scheme.onSurface.withValues(alpha: 0.28)
-        : primary
-            ? scheme.onPrimary
-            : scheme.primary;
-
-    return Tooltip(
-      message: tooltip,
-      child: Material(
-        color: bgColor,
-        shape: const CircleBorder(),
-        child: InkWell(
-          customBorder: const CircleBorder(),
-          onTap: enabled ? onPressed : null,
-          child: SizedBox(
-            width: size,
-            height: size,
-            child: Icon(
-              icon,
-              size: iconSize,
-              color: iconColor,
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -1826,7 +2201,7 @@ class _GameAnalysisScreenState
           'دقة Chess2 — $label',
           style: TextStyle(
             fontSize: 12,
-            color: Colors.grey.shade600,
+            color: Colors.white60,
           ),
         ),
         const SizedBox(height: 2),
@@ -1864,7 +2239,7 @@ class _GameAnalysisScreenState
                 '   •   '
                 '$_blackName ${b.toStringAsFixed(0)}%',
                 style: TextStyle(
-                  color: Colors.grey.shade700,
+                  color: Colors.white70,
                 ),
               ),
             ),
@@ -2336,7 +2711,7 @@ class _GameAnalysisScreenState
               emptyText,
               style: TextStyle(
                 fontSize: 12,
-                color: Colors.grey.shade700,
+                color: Colors.white70,
               ),
             )
           else ...[
@@ -2354,7 +2729,7 @@ class _GameAnalysisScreenState
               '${(_lossAt(plyIndex) / 100).toStringAsFixed(2)}',
               style: TextStyle(
                 fontSize: 12,
-                color: Colors.grey.shade700,
+                color: Colors.white70,
               ),
             ),
             const SizedBox(height: 6),
@@ -2399,7 +2774,7 @@ class _GameAnalysisScreenState
               '${stat.moveCount} نقلة',
               textAlign: TextAlign.center,
               style: TextStyle(
-                color: Colors.grey.shade700,
+                color: Colors.white70,
                 fontSize: 12,
               ),
             ),
@@ -2420,7 +2795,7 @@ class _GameAnalysisScreenState
               style: TextStyle(
                 color: stat.errorCount > 0
                     ? const Color(0xFFD9483D)
-                    : Colors.grey.shade700,
+                    : Colors.white70,
                 fontSize: 12,
               ),
             ),
@@ -2463,7 +2838,7 @@ class _GameAnalysisScreenState
               child: Text(
                 '${(i ~/ 2) + 1}.',
                 style: TextStyle(
-                  color: Colors.grey.shade600,
+                  color: Colors.white60,
                 ),
               ),
             ),
@@ -2747,56 +3122,6 @@ class _GameAnalysisScreenState
 // شريط التقييم الجانبي
 // ================================================================
 
-class _EvalBar extends StatelessWidget {
-  final double pawns;
-  final String label;
-
-  const _EvalBar({
-    required this.pawns,
-    required this.label,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final clamped = pawns.clamp(-8, 8);
-
-    final whiteFraction =
-        ((clamped + 8) / 16).clamp(0.0, 1.0);
-
-    return SizedBox(
-      width: 22,
-      child: Column(
-        children: [
-          Expanded(
-            child: ClipRRect(
-              borderRadius:
-                  BorderRadius.circular(4),
-              child: Container(
-                color: const Color(0xFF2B2B2B),
-                child: Align(
-                  alignment: Alignment.bottomCenter,
-                  child: FractionallySizedBox(
-                    heightFactor: whiteFraction,
-                    widthFactor: 1,
-                    child: Container(
-                      color: Colors.white,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: const TextStyle(fontSize: 10),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 // ================================================================
 // نتيجة تقييم وضعية واحدة / لحظة حرجة
 // ================================================================
@@ -3037,5 +3362,92 @@ class _EvalGraphPainter extends CustomPainter {
     return oldDelegate.currentIndex != currentIndex ||
         oldDelegate.evalPawns != evalPawns ||
         oldDelegate.qualities != qualities;
+  }
+}
+
+
+/// زر الشريط السفلي (أيقونة + عنوان) مع تكرار عند الضغط المطوّل.
+class _BarButton extends StatefulWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool enabled;
+  final bool repeat;
+
+  const _BarButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.enabled = true,
+    this.repeat = false,
+  });
+
+  @override
+  State<_BarButton> createState() => _BarButtonState();
+}
+
+class _BarButtonState extends State<_BarButton> {
+  Timer? _timer;
+
+  void _start() {
+    if (!widget.repeat) return;
+
+    _timer?.cancel();
+
+    _timer = Timer.periodic(
+      const Duration(milliseconds: 200),
+      (_) {
+        if (!widget.enabled) {
+          _stop();
+          return;
+        }
+
+        widget.onTap();
+      },
+    );
+  }
+
+  void _stop() {
+    _timer?.cancel();
+    _timer = null;
+  }
+
+  @override
+  void dispose() {
+    _stop();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = widget.enabled
+        ? Colors.white.withValues(alpha: 0.85)
+        : Colors.white.withValues(alpha: 0.25);
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: widget.enabled ? widget.onTap : null,
+      onLongPressStart: (_) {
+        if (!widget.enabled) return;
+        widget.onTap();
+        _start();
+      },
+      onLongPressEnd: (_) => _stop(),
+      onLongPressCancel: _stop,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(widget.icon, size: 38, color: color),
+            const SizedBox(height: 2),
+            Text(
+              widget.label,
+              style: TextStyle(color: color, fontSize: 13),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
