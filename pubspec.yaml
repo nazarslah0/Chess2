@@ -13,6 +13,7 @@ dependencies:
   chess: ^0.8.1
   audioplayers: ^6.1.0
   http: ^1.2.2
+  shared_preferences: ^2.5.3
 
 dev_dependencies:
   flutter_test:
@@ -25,4 +26,7 @@ flutter:
     - assets/pieces/classic/
     - assets/pieces/flat/
     - assets/pieces/wood/
+    - assets/pieces/chesscom/
+    - assets/chessground/boards/
+    - assets/chessground/piece_sets/
     - assets/sounds/
