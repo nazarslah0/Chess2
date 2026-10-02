@@ -22,11 +22,20 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
   assets:
+    # Chess pieces
     - assets/pieces/classic/
     - assets/pieces/flat/
     - assets/pieces/wood/
-    - assets/pieces/chesscom/
+    - assets/pieces/Chesscom/
+
+    # Chess boards
     - assets/chessground/boards/
-    - assets/chessground/piece_sets/
-    - assets/sounds/
+
+    # New chess sounds only
+    - assets/sounds/move.mp3
+    - assets/sounds/take.mp3
+    - assets/sounds/snap.mp3
+    - assets/sounds/swap.mp3
+    - assets/sounds/rewind.mp3
