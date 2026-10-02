@@ -1,100 +1,92 @@
+import 'dart:async';
+
 import 'package:audioplayers/audioplayers.dart';
 
-/// خدمة تشغيل أصوات الشطرنج: حركة عادية / أكل / كش / كش مات
-/// / تبييت (Castle) / ترقية / نهاية اللعبة.
-///
-/// نستخدم AudioPlayer منفصل لكل صوت لتفادي أي تأخير أو تقطيع
-/// عند تشغيل نقلات سريعة متتالية (كل مشغل يحمّل ملفه مسبقًا).
+/// أصوات Chess2 الجديدة.
+/// الملفات القديمة WAV أزيلت واستُبدلت بالكامل بالأصوات MP3 التي
+/// زوّدنا بها المستخدم.
 class SoundService {
   SoundService() {
     _init();
   }
 
   final Map<String, AudioPlayer> _players = {
-    'move': AudioPlayer(playerId: 'sound_move'),
-    'capture': AudioPlayer(playerId: 'sound_capture'),
-    'check': AudioPlayer(playerId: 'sound_check'),
-    'checkmate':
-        AudioPlayer(playerId: 'sound_checkmate'),
-    'castle': AudioPlayer(playerId: 'sound_castle'),
-    'promotion':
-        AudioPlayer(playerId: 'sound_promotion'),
-    'game_over':
-        AudioPlayer(playerId: 'sound_game_over'),
+    'move': AudioPlayer(playerId: 'chess2_move'),
+    'capture': AudioPlayer(playerId: 'chess2_take'),
+    'check': AudioPlayer(playerId: 'chess2_snap'),
+    'checkmate': AudioPlayer(playerId: 'chess2_snap_mate'),
+    'castle': AudioPlayer(playerId: 'chess2_swap'),
+    'promotion': AudioPlayer(playerId: 'chess2_swap_promotion'),
+    'game_over': AudioPlayer(playerId: 'chess2_rewind'),
   };
 
   static const Map<String, String> _files = {
-    'move': 'sounds/move.wav',
-    'capture': 'sounds/capture.wav',
-    'check': 'sounds/check.wav',
-    'checkmate': 'sounds/checkmate.wav',
-    'castle': 'sounds/castle.wav',
-    'promotion': 'sounds/promotion.wav',
-    'game_over': 'sounds/game_over.wav',
+    'move': 'sounds/move.mp3',
+    'capture': 'sounds/take.mp3',
+    'check': 'sounds/snap.mp3',
+    'checkmate': 'sounds/snap.mp3',
+    'castle': 'sounds/swap.mp3',
+    'promotion': 'sounds/swap.mp3',
+    'game_over': 'sounds/rewind.mp3',
   };
 
   bool enabled = true;
+  Future<void>? _ready;
 
-  Future<void> _init() async {
+  Future<void> _init() {
+    _ready ??= _preparePlayers();
+    return _ready!;
+  }
+
+  Future<void> _preparePlayers() async {
     for (final entry in _players.entries) {
       try {
-        await entry.value
-            .setReleaseMode(ReleaseMode.stop);
-
-        await entry.value.setSource(
-          AssetSource(_files[entry.key]!),
-        );
+        final player = entry.value;
+        await player.setReleaseMode(ReleaseMode.stop);
+        await player.setSource(AssetSource(_files[entry.key]!));
       } catch (_) {
-        // لا نمنع تشغيل التطبيق إن تعذّر تحميل صوت واحد.
+        // يبقى التطبيق يعمل حتى إذا تعذر تحميل مؤثر صوتي.
       }
     }
   }
 
-  Future<void> _play(String kind) async {
-    if (!enabled) {
-      return;
-    }
+  /// يبدأ الصوت فورًا بعد تجهيز المصدر. لا نستخدم await في مسار
+  /// النقلة نفسها حتى لا يتأخر تحديث الرقعة بسبب الصوت.
+  void _playNow(String kind) {
+    if (!enabled) return;
 
     final player = _players[kind];
+    if (player == null) return;
 
-    if (player == null) {
-      return;
-    }
-
-    try {
-      await player.stop();
-      await player.resume();
-    } catch (_) {}
+    () async {
+      try {
+        await _ready;
+        await player.stop();
+        await player.seek(Duration.zero);
+        unawaited(player.resume());
+      } catch (_) {}
+    }();
   }
 
-  void playMove() => _play('move');
+  void playMove() => _playNow('move');
+  void playCapture() => _playNow('capture');
+  void playCheck() => _playNow('check');
+  void playCheckmate() => _playNow('checkmate');
+  void playCastle() => _playNow('castle');
+  void playPromotion() => _playNow('promotion');
+  void playGameOver() => _playNow('game_over');
 
-  void playCapture() => _play('capture');
-
-  void playCheck() => _play('check');
-
-  void playCheckmate() => _play('checkmate');
-
-  void playCastle() => _play('castle');
-
-  void playPromotion() => _play('promotion');
-
-  void playGameOver() => _play('game_over');
-
-  /// نقطة دخول موحّدة تُستدعى من GameState.onSound.
-  /// القيم المدعومة: move / capture / check / checkmate /
-  /// castle / promotion / game_over.
   void playKind(String kind) {
     if (_players.containsKey(kind)) {
-      _play(kind);
+      _playNow(kind);
     } else {
-      playMove();
+      _playNow('move');
     }
   }
 
   void dispose() {
-    for (final p in _players.values) {
-      p.dispose();
+    for (final player in _players.values) {
+      player.dispose();
     }
   }
 }

@@ -204,6 +204,12 @@ bool isBrilliantCandidate({
   required int cpBeforeMover,
   required bool onlyLegalMove,
   required String movingPieceType, // 'P','N','B','R','Q','K'
+  // الفارق بالقرن بين أفضل نقلة وثاني أفضل نقلة (منظور
+  // اللاعب الذي يلعب). null يعني أن البيانات غير متوفرة
+  // (مثلاً multiPV لم يُرجع خطًا ثانيًا) — في هذه الحالة لا
+  // نصنّف "رائعة" أبدًا، تماشيًا مع: "إذا لم تكن البيانات
+  // كافية، لا تصنف النقلة Brilliant".
+  required int? secondBestGapCp,
 }) {
   if (baseQuality != MoveQuality.best) {
     return false;
@@ -222,5 +228,20 @@ bool isBrilliantCandidate({
     return false;
   }
 
-  return isSacrifice;
+  if (!isSacrifice) {
+    return false;
+  }
+
+  // لا بيانات كافية عن ثاني أفضل نقلة => لا تصنيف Brilliant.
+  if (secondBestGapCp == null) {
+    return false;
+  }
+
+  // يجب أن تكون هذه النقلة أفضل بوضوح من البديل التالي —
+  // أي أنها لم تكن مجرد واحدة من عدة خيارات متكافئة، بل
+  // الحل الوحيد القوي فعلًا في هذه الوضعية (معيار "Whether
+  // it is the only strong move" المطلوب).
+  const minGapCp = 80;
+
+  return secondBestGapCp >= minGapCp;
 }

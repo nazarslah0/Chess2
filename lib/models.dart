@@ -147,6 +147,27 @@ const List<BoardTheme> boardThemes = [
   ),
 ];
 
+/// مظهر تحليل المباريات القريب من واجهة Chess.com الظاهرة في الطلب.
+const BoardTheme chessComBoardTheme = BoardTheme(
+  name: 'Chess.com Green',
+  light: Color(0xFFF0F0D0),
+  dark: Color(0xFF769656),
+  lastMove: Color(0x99F6F669),
+  checkColor: Color(0xFFE05252),
+  selected: Color(0x99F6F669),
+  target: Color(0xAA5B7F3A),
+  border: Color(0xFF5C7042),
+);
+
+const PieceTheme chessComPieceTheme = PieceTheme(
+  name: 'Chess.com — Staunty',
+  whiteFill: Color(0xFFF7F7F7),
+  whiteStroke: Color(0xFF555555),
+  blackFill: Color(0xFF333333),
+  blackStroke: Color(0xFFD8D8D8),
+  assetFolder: 'chesscom',
+);
+
 /// ============================================================
 /// Piece Themes List
 /// ============================================================

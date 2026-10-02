@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:chess/chess.dart' as ch;
 import 'package:flutter/material.dart';
@@ -9,7 +8,9 @@ import 'engine_service.dart';
 import 'board_widget.dart';
 import 'pgn_utils.dart';
 import 'game_review_models.dart';
-import 'app_theme.dart';
+import 'uci_utils.dart';
+import 'analysis_cache.dart';
+import 'analysis_result.dart';
 
 /// شاشة تحليل مباراة واحدة — **مصدر واحد للتحليل** تُستخدم من
 /// Chess.com ومن Lichess ومن PGN مُلصَق يدويًا على حدٍّ سواء.
@@ -54,15 +55,43 @@ class _GameAnalysisScreenState
   List<List<String>> _pvUci = <List<String>>[];
   List<MoveQuality> _qualities = <MoveQuality>[];
 
+  /// منفصل تمامًا عن MoveQuality.brilliant: true فقط إذا
+  /// كانت هذه النقلة المُلعَبة تطابق bestUci الخاص بـ
+  /// Stockfish تمامًا (from/to/promotion). نقلة قد تكون
+  /// Best Engine Move بدون أن تكون Brilliant، والعكس غير
+  /// وارد أصلًا (Brilliant تُشتق من Best فقط).
+  List<bool> _isBestEngineMove = <bool>[];
+
+  /// تقييم ثاني أفضل نقلة (منظور الأبيض، قرن) لكل وضعية —
+  /// بنفس طول _evalPawns (موضع واحد لكل ply + الوضعية
+  /// الابتدائية).
+  List<int?> _secondBestCpWhite = <int?>[];
+
+  /// الفارق المحسوب فعليًا بين أفضل نقلة وثاني أفضل نقلة لكل
+  /// ply (منظور اللاعب)، بطول _plies — يُستخدم لاختيار
+  /// "أفضل نقلة في المباراة" بمعيار حقيقي.
+  List<int?> _moveGapCp = <int?>[];
+
+  /// منظور موحّد لنتائج التحليل (انظر analysis_result.dart) —
+  /// يُبنى بعد اكتمال التحليل، ويشكّل الأساس الذي يمكن أن
+  /// يُستخدم لاحقًا لتحليل نقاط ضعف اللاعب عبر عدة مباريات
+  /// (Personal Chess Coach) دون أي تحليل إضافي لـ Stockfish.
+  List<MoveAnalysisResult> _analysisResults =
+      <MoveAnalysisResult>[];
+
   Map<String, String> _headers = <String, String>{};
 
   int _currentIndex = 0;
 
   bool _analyzing = false;
+  bool _cancelled = false;
+  bool _servedFromCache = false;
   double _progress = 0;
-  String _analysisStage = 'تهيئة';
-  int _analysisDone = 0;
-  int _analysisTotal = 0;
+  int _analyzedCount = 0;
+
+  final double _depth = 14;
+
+  late final String _cacheKey;
 
   int _requestToken = 0;
 
@@ -96,8 +125,47 @@ class _GameAnalysisScreenState
       _fens.length,
       (_) => const <String>[],
     );
+    _secondBestCpWhite =
+        List<int?>.filled(_fens.length, null);
+    _isBestEngineMove =
+        List<bool>.filled(_plies.length, false);
+    _moveGapCp =
+        List<int?>.filled(_plies.length, null);
 
     _boardState.loadFen(_fens.first);
+
+    // Cache: إن سبق تحليل نفس PGN بنفس إعدادات المحرك خلال
+    // هذه الجلسة، نستخدم النتائج المحفوظة فورًا بلا تشغيل
+    // Stockfish من جديد إطلاقًا.
+    _cacheKey = AnalysisCache.instance.keyFor(
+      pgn: widget.pgn,
+      depth: _depth.round(),
+      multiPv: 2,
+    );
+
+    final cached = AnalysisCache.instance.get(_cacheKey);
+
+    if (cached != null) {
+      _evalPawns = List<double>.from(cached.evalPawns);
+      _evalLabels = List<String>.from(cached.evalLabels);
+      _bestUci = List<String>.from(cached.bestUci);
+      _pvUci = List<List<String>>.from(cached.pvUci);
+      _secondBestCpWhite =
+          List<int?>.from(cached.secondBestCpWhite);
+      _qualities =
+          List<MoveQuality>.from(cached.qualities);
+      _isBestEngineMove =
+          List<bool>.from(cached.isBestEngineMove);
+      _moveGapCp = List<int?>.from(cached.moveGapCp);
+      _analysisResults = _buildAnalysisResults();
+      _analyzedCount = _fens.length;
+      _progress = 1;
+      _analyzing = false;
+      _servedFromCache = true;
+      return;
+    }
+
+    _engine.init();
 
     _analyzing = true;
 
@@ -126,282 +194,235 @@ class _GameAnalysisScreenState
       widget.resultLabel ?? _headers['Result'] ?? '';
 
   // ============================================================
-  // التحليل السريع + التحليل العميق للمرشحين
+  // التحليل الكامل للمباراة
   // ============================================================
 
-  String _normalizeUci(String value) {
-    final v = value.trim().toLowerCase();
-    if (v.length < 4) return '';
-    final promotion = v.length > 4 ? v.substring(4, 5) : '';
-    return '${v.substring(0, 4)}$promotion';
-  }
+  /// نطلب multiPV=2 (بدل 1) للحصول أيضًا على ثاني أفضل نقلة
+  /// وتقييمها — هذا ضروري لتحسين كشف "رائعة" (هل كانت هذه
+  /// النقلة الوحيدة القوية فعلًا؟) ولاختيار "أفضل نقلة في
+  /// المباراة" بمعيار حقيقي بدل تخمين. التكلفة الإضافية
+  /// محدودة (نفس البحث، سطر PV إضافي) وليست تحليلًا مضاعفًا.
+  Future<_Eval> _evaluatePosition(String fen) {
+    final completer = Completer<_Eval>();
 
-  String _playedUci(PgnPly ply) {
-    final promotion =
-        ply.promotion?.trim().toLowerCase() ?? '';
-    return '${ply.from.toLowerCase()}'
-        '${ply.to.toLowerCase()}'
-        '$promotion';
-  }
+    double lastPawns = 0;
+    String lastLabel = '0.00';
+    List<String> lastPv = const <String>[];
+    int? secondBestCp;
 
-  bool _uciMatchesPlayed(
-    String bestUci,
-    PgnPly ply,
-  ) {
-    final best = _normalizeUci(bestUci);
-    final played = _normalizeUci(_playedUci(ply));
+    _engine.onInfo = (multipv, line) {
+      if (multipv == 1) {
+        lastPawns = line.evalPawns;
+        lastLabel = line.evalLabel;
+        lastPv = line.uciMoves;
+      } else if (multipv == 2) {
+        secondBestCp = cpFromWhitePerspective(
+          line.evalPawns,
+          line.evalLabel,
+        );
+      }
+    };
 
-    return best.isNotEmpty &&
-        played.isNotEmpty &&
-        best == played;
-  }
+    _engine.onBestMove = (uci) {
+      if (!completer.isCompleted) {
+        completer.complete(
+          _Eval(
+            lastPawns,
+            lastLabel,
+            uci,
+            lastPv,
+            secondBestCpWhite: secondBestCp,
+          ),
+        );
+      }
+    };
 
-  bool _looksLikeDeepCandidate(
-    int i,
-    List<EnginePositionResult> fast,
-  ) {
-    if (i < 0 || i >= _plies.length) return false;
-
-    final p = _plies[i];
-
-    final before = cpFromWhitePerspective(
-      fast[i].evalPawns,
-      fast[i].evalLabel,
+    _engine.analyze(
+      fen,
+      depth: _depth.round(),
+      multiPv: 2,
     );
 
-    final after = cpFromWhitePerspective(
-      fast[i + 1].evalPawns,
-      fast[i + 1].evalLabel,
+    return completer.future.timeout(
+      const Duration(seconds: 30),
+      onTimeout: () => _Eval(
+        lastPawns,
+        lastLabel,
+        '',
+        lastPv,
+        secondBestCpWhite: secondBestCp,
+      ),
     );
-
-    final sign = p.color == 'w' ? 1 : -1;
-    final loss = (before * sign) - (after * sign);
-
-    // المرشحون الرئيسيون للتحليل العميق:
-    // 1) فقد كبير في التقييم.
-    // 2) النقلة ليست أفضل نقلة للمحرك.
-    // 3) تغير حاد في التقييم.
-    // 4) نقلات أخذ/تضحية قد تكون Brilliant.
-    final bestMatches =
-        _uciMatchesPlayed(fast[i].bestUci, p);
-
-    if (loss.abs() >= 60) return true;
-    if (!bestMatches && loss >= 30) return true;
-    if (loss.abs() >= 90) return true;
-
-    final piece =
-        GameState.parseBoard(
-          p.fenBefore.split(' ').first,
-        )[p.from];
-
-    if (piece != null &&
-        piece.length == 2 &&
-        piece[1] != 'P' &&
-        piece[1] != 'K' &&
-        p.isCapture) {
-      return true;
-    }
-
-    return false;
   }
 
   Future<void> _runAnalysis(int token) async {
-    try {
+    if (!_engine.ready) {
       await _engine.init();
 
-      _analysisStage = 'التحليل السريع';
-      _analysisDone = 0;
-      _progress = 0;
+      var waited = 0;
+      while (!_engine.ready && waited < 8000) {
+        await Future.delayed(
+          const Duration(milliseconds: 200),
+        );
+        waited += 200;
+      }
+    }
 
-      if (mounted) {
-        setState(() {});
+    for (var i = 0; i < _fens.length; i++) {
+      if (!mounted || token != _requestToken) {
+        return;
       }
 
-      // ----------------------------------------------------------
-      // Pass 1: تحليل سريع متوازي على عدة أنوية.
-      // ----------------------------------------------------------
-      final workerCount =
-          _engine.recommendedWorkerCount;
-
-      final fastResults =
-          await _engine.analyzePositionsParallel(
-        _fens,
-        workerCount: workerCount,
-        depth: 11,
-        movetimeMs: 110,
-        onProgress: (done, total) {
-          if (!mounted || token != _requestToken) return;
-
-          setState(() {
-            _analysisDone = done;
-            _analysisTotal = total;
-            _progress =
-                total == 0 ? 0 : (done / total) * 0.70;
-          });
-        },
-      );
-
-      if (!mounted || token != _requestToken) return;
-
-      for (var i = 0; i < fastResults.length; i++) {
-        _evalPawns[i] = fastResults[i].evalPawns;
-        _evalLabels[i] = fastResults[i].evalLabel;
-        _bestUci[i] = fastResults[i].bestUci;
-        _pvUci[i] = fastResults[i].pv;
+      if (_cancelRequested) {
+        break;
       }
 
-      // ----------------------------------------------------------
-      // اكتشاف المرشحين قبل التحليل العميق.
-      // نعيد فحص الوضعيات المهمة فقط، بدل رفع العمق للمباراة
-      // كلها.
-      // ----------------------------------------------------------
-      final candidatePositions = <int>{};
+      final r = await _evaluatePosition(_fens[i]);
 
-      for (var i = 0; i < _plies.length; i++) {
-        if (_looksLikeDeepCandidate(i, fastResults)) {
-          candidatePositions.add(i);
-          candidatePositions.add(i + 1);
-        }
+      if (!mounted || token != _requestToken) {
+        return;
       }
 
-      // دائمًا نضمن فحص أول وآخر وضعية.
-      candidatePositions.add(0);
-      candidatePositions.add(_fens.length - 1);
-
-      final sortedCandidates =
-          candidatePositions
-              .where((i) => i >= 0 && i < _fens.length)
-              .toList()
-            ..sort();
-
-      // ----------------------------------------------------------
-      // Pass 2: تحليل عميق للمرشحين فقط.
-      // ----------------------------------------------------------
-      if (sortedCandidates.isNotEmpty) {
-        _analysisStage = 'التحليل العميق للنقلات المهمة';
-        _analysisDone = 0;
-        _analysisTotal = sortedCandidates.length;
-
-        if (mounted) {
-          setState(() {});
-        }
-
-        final candidateFens = sortedCandidates
-            .map((i) => _fens[i])
-            .toList(growable: false);
-
-        final deepResults =
-            await _engine.analyzePositionsParallel(
-          candidateFens,
-          workerCount: workerCount,
-          depth: 18,
-          movetimeMs: 320,
-          onProgress: (done, total) {
-            if (!mounted || token != _requestToken) return;
-
-            setState(() {
-              _analysisDone = done;
-              _analysisTotal = total;
-              _progress =
-                  0.70 +
-                  (total == 0
-                          ? 0
-                          : done / total) *
-                      0.30;
-            });
-          },
-        );
-
-        if (!mounted || token != _requestToken) return;
-
-        for (var j = 0;
-            j < sortedCandidates.length &&
-                j < deepResults.length;
-            j++) {
-          final index = sortedCandidates[j];
-          final result = deepResults[j];
-
-          _evalPawns[index] = result.evalPawns;
-          _evalLabels[index] = result.evalLabel;
-          _bestUci[index] = result.bestUci;
-          _pvUci[index] = result.pv;
-        }
-      }
-
-      // ----------------------------------------------------------
-      // التصنيف النهائي بعد انتهاء التحليل العميق.
-      // ----------------------------------------------------------
-      final qualities = <MoveQuality>[];
-
-      for (var i = 0; i < _plies.length; i++) {
-        final p = _plies[i];
-
-        final cpBefore = cpFromWhitePerspective(
-          _evalPawns[i],
-          _evalLabels[i],
-        );
-
-        final cpAfter = cpFromWhitePerspective(
-          _evalPawns[i + 1],
-          _evalLabels[i + 1],
-        );
-
-        final wasBest =
-            _uciMatchesPlayed(
-          _bestUci[i],
-          p,
-        );
-
-        var quality = classifyMove(
-          cpBeforeWhite: cpBefore,
-          cpAfterWhite: cpAfter,
-          color: p.color,
-          wasBestMove: wasBest,
-        );
-
-        if (quality == MoveQuality.best) {
-          final sign =
-              p.color == 'w' ? 1 : -1;
-
-          final cpBeforeMover =
-              cpBefore * sign;
-
-          final upgraded =
-              _tryUpgradeToBrilliant(
-            ply: p,
-            baseQuality: quality,
-            cpBeforeMover: cpBeforeMover,
-          );
-
-          if (upgraded != null) {
-            quality = upgraded;
-          }
-        }
-
-        qualities.add(quality);
-      }
-
-      if (!mounted || token != _requestToken) return;
+      _evalPawns[i] = r.pawns;
+      _evalLabels[i] = r.label;
+      _bestUci[i] = r.bestUci;
+      _pvUci[i] = r.pv;
+      _secondBestCpWhite[i] = r.secondBestCpWhite;
 
       setState(() {
-        _qualities = qualities;
-        _analyzing = false;
-        _analysisStage = 'اكتمل التحليل';
-        _progress = 1.0;
-        _currentIndex = 0;
-      });
-
-      // يبدأ المستخدم من الوضعية الابتدائية، مثل وضع المراجعة
-      // في تطبيقات تحليل المباريات الاحترافية.
-      _boardState.loadFen(_fens.first);
-    } catch (e) {
-      if (!mounted || token != _requestToken) return;
-
-      setState(() {
-        _analyzing = false;
-        _analysisStage = 'فشل التحليل';
+        _analyzedCount = i + 1;
+        _progress = (i + 1) / _fens.length;
       });
     }
+
+    // نصنّف فقط النقلات التي اكتمل تحليل وضعيتها السابقة
+    // واللاحقة فعليًا — إذا أُلغي التحليل منتصف الطريق، تبقى
+    // هذه النتائج الجزئية صالحة ومستخدمة بدل ضياعها بالكامل.
+    final classifiableCount =
+        (_analyzedCount - 1).clamp(0, _plies.length);
+
+    final qualities = <MoveQuality>[];
+
+    for (var i = 0; i < classifiableCount; i++) {
+      final p = _plies[i];
+
+      final cpBefore = cpFromWhitePerspective(
+        _evalPawns[i],
+        _evalLabels[i],
+      );
+
+      final cpAfter = cpFromWhitePerspective(
+        _evalPawns[i + 1],
+        _evalLabels[i + 1],
+      );
+
+      final bestUci = _bestUci[i];
+
+      // مقارنة دقيقة كاملة (from + to + promotion)، وليست
+      // startsWith النصية التي كانت تخطئ مثلًا بين "e7e8"
+      // و"e7e8q" (ترقية مختلفة) أو حتى "e7e1" إن بدأت بنفس
+      // المربعين من الصدفة في نصوص أطول.
+      final playedUciMove = UciMove(
+        from: p.from,
+        to: p.to,
+        promotion: p.promotion?.toLowerCase(),
+      );
+
+      final wasBest = isSameUciMove(
+        bestUci,
+        playedUciMove.uci,
+      );
+
+      var quality = classifyMove(
+        cpBeforeWhite: cpBefore,
+        cpAfterWhite: cpAfter,
+        color: p.color,
+        wasBestMove: wasBest,
+      );
+
+      _isBestEngineMove[i] = wasBest;
+
+      final sign = p.color == 'w' ? 1 : -1;
+      final cpBeforeMover = cpBefore * sign;
+
+      // فجوة التقييم بين أفضل نقلة وثاني أفضل نقلة، من منظور
+      // اللاعب الذي يلعب — كبيرة تعني "هذه كانت النقلة
+      // الوحيدة القوية فعلًا"، صغيرة تعني وجود بدائل شبه
+      // مكافئة.
+      final secondBestWhite = _secondBestCpWhite[i];
+
+      final gapCp = secondBestWhite != null
+          ? (cpBefore * sign) - (secondBestWhite * sign)
+          : null;
+
+      _moveGapCp[i] = gapCp;
+
+      if (quality == MoveQuality.best) {
+        final upgraded = _tryUpgradeToBrilliant(
+          ply: p,
+          baseQuality: quality,
+          cpBeforeMover: cpBeforeMover,
+          secondBestGapCp: gapCp,
+        );
+
+        if (upgraded != null) {
+          quality = upgraded;
+        }
+      }
+
+      qualities.add(quality);
+    }
+
+    if (!mounted || token != _requestToken) {
+      return;
+    }
+
+    // لا ننقل المستخدم تلقائيًا إلى آخر نقلة بعد اكتمال
+    // التحليل — يجب أن يبقى عند الوضعية الابتدائية (أو أي
+    // موضع كان يتصفحه أثناء انتظار التحليل) وينتقل يدويًا
+    // باستخدام أزرار التنقل.
+    setState(() {
+      _qualities = qualities;
+      _analyzing = false;
+      _cancelled = _cancelRequested &&
+          _analyzedCount < _fens.length;
+      _analysisResults = _buildAnalysisResults();
+    });
+
+    // لا نخزّن في Cache إلا تحليلًا مكتملًا بالكامل — نتيجة
+    // جزئية (بعد إلغاء) لا يجب أن تُقدَّم لاحقًا على أنها
+    // تحليل كامل للمباراة.
+    if (!_cancelled && _analyzedCount >= _fens.length) {
+      AnalysisCache.instance.put(
+        _cacheKey,
+        AnalysisCacheEntry(
+          evalPawns: List<double>.from(_evalPawns),
+          evalLabels: List<String>.from(_evalLabels),
+          bestUci: List<String>.from(_bestUci),
+          pvUci: List<List<String>>.from(_pvUci),
+          secondBestCpWhite:
+              List<int?>.from(_secondBestCpWhite),
+          qualities:
+              List<MoveQuality>.from(_qualities),
+          isBestEngineMove:
+              List<bool>.from(_isBestEngineMove),
+          moveGapCp: List<int?>.from(_moveGapCp),
+        ),
+      );
+    }
+  }
+
+  /// إلغاء التحليل مع الاحتفاظ بكل ما تم تحليله فعليًا حتى
+  /// هذه اللحظة (تقييم، أفضل نقلة، تصنيف) — فقط النقلات بعد
+  /// نقطة الإلغاء تبقى غير محلَّلة.
+  void _cancelAnalysis() {
+    if (!_analyzing) return;
+
+    setState(() {
+      _cancelRequested = true;
+    });
+
+    _engine.stop();
   }
 
   // ============================================================
@@ -412,6 +433,7 @@ class _GameAnalysisScreenState
     required PgnPly ply,
     required MoveQuality baseQuality,
     required int cpBeforeMover,
+    required int? secondBestGapCp,
   }) {
     try {
       final boardBefore = GameState.parseBoard(
@@ -509,6 +531,7 @@ class _GameAnalysisScreenState
         cpBeforeMover: cpBeforeMover,
         onlyLegalMove: legalCount <= 1,
         movingPieceType: movingType,
+        secondBestGapCp: secondBestGapCp,
       );
 
       return brilliant ? MoveQuality.brilliant : null;
@@ -665,7 +688,7 @@ class _GameAnalysisScreenState
         arrows.add(
           _decodeArrow(
             _bestUci[0],
-            Colors.green.withValues(alpha: 0.85),
+            Colors.green.withOpacity(0.85),
           ),
         );
       }
@@ -695,7 +718,7 @@ class _GameAnalysisScreenState
         arrows.add(
           _decodeArrow(
             _bestUci[k],
-            Colors.green.withValues(alpha: 0.85),
+            Colors.green.withOpacity(0.85),
           ),
         );
       }
@@ -801,7 +824,10 @@ class _GameAnalysisScreenState
     double whiteSum = 0, blackSum = 0;
     int whiteN = 0, blackN = 0;
 
-    for (var i = 0; i < _plies.length; i++) {
+    // نقتصر على النقلات التي حُلِّلت فعليًا (قد تكون أقصر من
+    // _plies.length إذا أُلغي التحليل منتصف الطريق) — لا نخترع
+    // دقة لنقلات لم تُحلَّل بعد.
+    for (var i = 0; i < _qualities.length; i++) {
       final acc = _accuracyAt(i);
 
       if (_plies[i].color == 'w') {
@@ -819,22 +845,34 @@ class _GameAnalysisScreenState
     };
   }
 
-  Map<String, double> get _acplBySide {
-    double w = 0, b = 0;
-    int wn = 0, bn = 0;
-    for (var i = 0; i < _plies.length && i < _qualities.length; i++) {
-      final loss = math.max(0, _lossAt(i)).toDouble();
+  /// Average Centipawn Loss لكل لاعب — متوسط خسارة التقييم
+  /// الفعلية بوحدة القرن لكل نقلة لعبها، محسوبة من نتائج
+  /// Stockfish المخزَّنة مباشرة (وليست مُخترَعة). قيمة أقل
+  /// = لعب أدق. null يعني عدم توفر بيانات كافية بعد.
+  Map<String, double?> get _acplBySide {
+    if (_qualities.isEmpty) {
+      return {'w': null, 'b': null};
+    }
+
+    double whiteSum = 0, blackSum = 0;
+    int whiteN = 0, blackN = 0;
+
+    for (var i = 0; i < _qualities.length; i++) {
+      final loss =
+          _lossAt(i).clamp(0, 1 << 30).toDouble();
+
       if (_plies[i].color == 'w') {
-        w += loss;
-        wn++;
+        whiteSum += loss;
+        whiteN++;
       } else {
-        b += loss;
-        bn++;
+        blackSum += loss;
+        blackN++;
       }
     }
+
     return {
-      'w': wn == 0 ? 0 : w / wn,
-      'b': bn == 0 ? 0 : b / bn,
+      'w': whiteN > 0 ? (whiteSum / whiteN) / 100 : null,
+      'b': blackN > 0 ? (blackSum / blackN) / 100 : null,
     };
   }
 
@@ -852,7 +890,7 @@ class _GameAnalysisScreenState
       'endgame': {'w': 0, 'b': 0},
     };
 
-    for (var i = 0; i < _plies.length; i++) {
+    for (var i = 0; i < _qualities.length; i++) {
       final phase = _phaseOf(i);
       final color = _plies[i].color;
       final acc = _accuracyAt(i);
@@ -905,13 +943,131 @@ class _GameAnalysisScreenState
     return result;
   }
 
-  /// أفضل نقلة فعلية حسب Stockfish، منفصلة عن تصنيف Brilliant.
-  int? get _bestMoveIndex {
-    for (var i = 0; i < _plies.length; i++) {
-      if (i >= _bestUci.length) continue;
-      if (_uciMatchesPlayed(_bestUci[i], _plies[i])) return i;
+  /// يبني "منظور موحّد" (MoveAnalysisResult) لكل نقلة حُلِّلت
+  /// فعليًا — انظر التعليق في analysis_result.dart لشرح علاقة
+  /// هذا بالمصفوفات الداخلية.
+  List<MoveAnalysisResult> _buildAnalysisResults() {
+    final results = <MoveAnalysisResult>[];
+
+    for (var i = 0; i < _qualities.length; i++) {
+      final p = _plies[i];
+      final q = _qualities[i];
+
+      final sign = p.color == 'w' ? 1 : -1;
+
+      final evalBeforeMover = cpFromWhitePerspective(
+            _evalPawns[i],
+            _evalLabels[i],
+          ) *
+          sign;
+
+      final evalAfterMover = cpFromWhitePerspective(
+            _evalPawns[i + 1],
+            _evalLabels[i + 1],
+          ) *
+          sign;
+
+      final bestUci = i < _bestUci.length ? _bestUci[i] : '';
+
+      final bestSan = bestUci.length >= 4
+          ? _pvToSan(_fens[i], [bestUci])
+          : '';
+
+      results.add(
+        MoveAnalysisResult(
+          ply: i,
+          moveNumber: (i ~/ 2) + 1,
+          side: p.color,
+          san: p.san,
+          uci: '${p.from}${p.to}${p.promotion ?? ''}',
+          fenBefore: p.fenBefore,
+          fenAfter: p.fenAfter,
+          evaluationBeforeCp: evalBeforeMover,
+          evaluationAfterCp: evalAfterMover,
+          evaluationLossCp: _lossAt(i),
+          bestMoveSan: bestSan,
+          bestMoveUci: bestUci,
+          principalVariationUci:
+              i < _pvUci.length ? _pvUci[i] : const [],
+          classification: q,
+          phase: _phaseOf(i),
+          materialBefore: _nonPawnMaterial(p.fenBefore),
+          materialAfter: _nonPawnMaterial(p.fenAfter),
+          isCritical: q == MoveQuality.mistake ||
+              q == MoveQuality.blunder ||
+              q == MoveQuality.miss,
+          isBestMove: i < _isBestEngineMove.length
+              ? _isBestEngineMove[i]
+              : false,
+          isBrilliant: q == MoveQuality.brilliant,
+          isMistake: q == MoveQuality.mistake,
+          isBlunder: q == MoveQuality.blunder,
+          isMissedOpportunity: q == MoveQuality.miss,
+        ),
+      );
     }
-    return null;
+
+    return results;
+  }
+
+  /// نقلة "رائعة!!" الأبرز في المباراة (أكبر قيمة تضحية)، أو
+  /// null إن لم توجد أي نقلة رائعة — لا نخترع "أفضل نقلة"
+  /// بديلة بلا معيار حقيقي يميّزها عن عشرات النقلات "الأفضل".
+  /// نقلة "رائعة!!" الأبرز في المباراة، منفصلة تمامًا عن
+  /// "أفضل نقلة Engine" — قد توجد إحداهما بدون الأخرى.
+  int? get _brilliantMoveIndex {
+    int? best;
+    var bestScore = -1;
+
+    for (var i = 0; i < _qualities.length; i++) {
+      if (_qualities[i] != MoveQuality.brilliant) continue;
+
+      try {
+        final boardBefore = GameState.parseBoard(
+          _plies[i].fenBefore.split(' ').first,
+        );
+
+        final movingPiece =
+            boardBefore[_plies[i].from];
+
+        final movingValue = movingPiece != null &&
+                movingPiece.length == 2
+            ? (pieceValues[movingPiece[1]] ?? 0)
+            : 0;
+
+        if (movingValue > bestScore) {
+          bestScore = movingValue;
+          best = i;
+        }
+      } catch (_) {}
+    }
+
+    return best;
+  }
+
+  /// "أفضل نقلة في المباراة" (Best Engine Move) — معيار
+  /// مختلف تمامًا عن Brilliant: من بين كل النقلات التي
+  /// طابقت bestUci الخاص بـ Stockfish تمامًا (from/to/
+  /// promotion)، نختار الوضعية التي كان فيها الفارق عن ثاني
+  /// أفضل نقلة أكبر ما يمكن — أي الموضع الذي كان فيه إيجاد
+  /// هذه النقلة بالذات الأكثر أهمية وحسمًا، بدل اختيار
+  /// عشوائي من بين عشرات النقلات "الأفضل" في مباراة جيدة.
+  int? get _bestEngineMoveIndex {
+    int? best;
+    var bestGap = -1 << 30;
+
+    for (var i = 0; i < _isBestEngineMove.length; i++) {
+      if (!_isBestEngineMove[i]) continue;
+
+      final gap = _moveGapCp[i];
+
+      if (gap != null && gap > bestGap) {
+        bestGap = gap;
+        best = i;
+      }
+    }
+
+    return best;
   }
 
   /// أسوأ نقلة في المباراة = أكبر خسارة تقييم مُسجَّلة فعليًا.
@@ -1000,16 +1156,14 @@ class _GameAnalysisScreenState
     for (var i = 0; i < _qualities.length; i++) {
       final q = _qualities[i];
 
-      final loss = _lossAt(i);
       if (q == MoveQuality.mistake ||
           q == MoveQuality.blunder ||
-          q == MoveQuality.miss ||
-          loss >= 80) {
+          q == MoveQuality.miss) {
         moments.add(
           _CriticalMoment(
             plyIndex: i,
             quality: q,
-            lossCp: loss,
+            lossCp: _lossAt(i),
           ),
         );
       }
@@ -1022,17 +1176,6 @@ class _GameAnalysisScreenState
     return moments.take(8).toList();
   }
 
-  Future<void> _cancelAnalysis() async {
-    if (!_analyzing) return;
-    _requestToken++;
-    await _engine.stop();
-    if (!mounted) return;
-    setState(() {
-      _analyzing = false;
-      _analysisStage = 'تم إيقاف التحليل';
-    });
-  }
-
   // ============================================================
   // Build
   // ============================================================
@@ -1041,43 +1184,49 @@ class _GameAnalysisScreenState
   Widget build(BuildContext context) {
     if (_parseError != null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('تحليل المباراة')),
-        body: Center(child: Padding(padding: const EdgeInsets.all(20), child: Text(_parseError!, textAlign: TextAlign.center))),
+        appBar: AppBar(
+          title: const Text('تحليل المباراة'),
+        ),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Text(
+              _parseError!,
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ),
       );
     }
 
-    final progress = (_progress * 100).round();
-
     return Scaffold(
+      backgroundColor: const Color(0xFF312E2B),
       appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('$_whiteName  •  $_blackName', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
-            if (widget.sourceLabel.isNotEmpty)
-              Text(widget.sourceLabel, style: const TextStyle(fontSize: 10, color: Chess2Theme.muted)),
-          ],
-        ),
+        backgroundColor: const Color(0xFF262522),
+        foregroundColor: Colors.white,
+        title: Text('$_whiteName ضد $_blackName'),
         actions: [
-          if (_analyzing)
-            IconButton(
-              tooltip: 'إلغاء التحليل',
-              onPressed: _cancelAnalysis,
-              icon: const Icon(Icons.stop_circle_outlined, color: Chess2Theme.red),
-            ),
           IconButton(
             tooltip: 'قلب الرقعة',
-            icon: const Icon(Icons.swap_vert_rounded),
-            onPressed: () => setState(_boardState.flipBoard),
+            icon: const Icon(
+              Icons.swap_vert_rounded,
+            ),
+            onPressed: () {
+              setState(() {
+                _boardState.flipBoard();
+              });
+            },
           ),
         ],
         bottom: TabBar(
           controller: _tabController,
           isScrollable: true,
-          tabAlignment: TabAlignment.start,
+          labelColor: const Color(0xFF9BCB4A),
+          unselectedLabelColor: Colors.white70,
+          indicatorColor: const Color(0xFF9BCB4A),
           tabs: const [
-            Tab(text: 'المراجعة'),
-            Tab(text: 'التقرير'),
+            Tab(text: 'نظرة عامة'),
+            Tab(text: 'تقرير المباراة'),
             Tab(text: 'النقلات'),
             Tab(text: 'الأخطاء'),
             Tab(text: 'اللحظات الحرجة'),
@@ -1088,35 +1237,56 @@ class _GameAnalysisScreenState
         child: Column(
           children: [
             if (_analyzing)
-              Container(
-                margin: const EdgeInsets.fromLTRB(12, 10, 12, 4),
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Chess2Theme.surface,
-                  borderRadius: BorderRadius.circular(15),
-                  border: Border.all(color: Chess2Theme.border),
+              LinearProgressIndicator(
+                value: _progress,
+              ),
+            if (_analyzing)
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(
+                  vertical: 6,
+                  horizontal: 10,
                 ),
-                child: Column(
+                child: Row(
                   children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.bolt_rounded, color: Chess2Theme.blue, size: 18),
-                        const SizedBox(width: 8),
-                        Expanded(child: Text(_analysisStage, style: const TextStyle(fontWeight: FontWeight.w800))),
-                        Text('$progress%', style: const TextStyle(color: Chess2Theme.blue, fontWeight: FontWeight.w900)),
-                      ],
+                    Expanded(
+                      child: Text(
+                        'جارٍ تحليل المباراة... '
+                        'النقلة $_analyzedCount من'
+                        ' ${_fens.length}'
+                        ' (${(_progress * 100).round()}%)',
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodySmall,
+                      ),
                     ),
-                    const SizedBox(height: 8),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(10),
-                      child: LinearProgressIndicator(value: _progress, minHeight: 6),
-                    ),
-                    const SizedBox(height: 7),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: Text('$_analysisDone / $_analysisTotal  •  ${_engine.recommendedWorkerCount} Workers', style: const TextStyle(color: Chess2Theme.muted, fontSize: 10)),
+                    TextButton.icon(
+                      onPressed: _cancelAnalysis,
+                      icon: const Icon(
+                        Icons.cancel_outlined,
+                        size: 18,
+                      ),
+                      label: const Text('إلغاء'),
                     ),
                   ],
+                ),
+              ),
+            if (_cancelled)
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(
+                  vertical: 6,
+                  horizontal: 10,
+                ),
+                child: Text(
+                  'تم إلغاء التحليل عند النقلة'
+                  ' $_analyzedCount من ${_fens.length}.'
+                  ' النتائج قبل هذه النقطة محفوظة'
+                  ' ومتاحة، والباقي غير محلَّل.',
+                  style: TextStyle(
+                    color: Colors.orange.shade800,
+                    fontSize: 12,
+                  ),
                 ),
               ),
             Expanded(
@@ -1145,25 +1315,51 @@ class _GameAnalysisScreenState
     final hasEval = _evalPawns.isNotEmpty;
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 18),
+      padding: const EdgeInsets.fromLTRB(0, 0, 0, 18),
       child: Column(
         children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(
-              color: Chess2Theme.surface,
-              borderRadius: BorderRadius.circular(15),
-              border: Border.all(color: Chess2Theme.border),
-            ),
-            child: Row(
-              children: [
-                Expanded(child: Text(_whiteName, textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w800))),
-                Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: Chess2Theme.surface2, borderRadius: BorderRadius.circular(10)), child: Text(_resultText.isEmpty ? 'VS' : _resultText, style: const TextStyle(fontWeight: FontWeight.w900))),
-                Expanded(child: Text(_blackName, textAlign: TextAlign.left, style: const TextStyle(fontWeight: FontWeight.w800))),
-              ],
-            ),
+          _buildChessComPlayerBar(
+            name: _blackName,
+            pieceColor: 'b',
+            active: _currentIndex > 0 &&
+                _plies.isNotEmpty &&
+                _plies[_currentIndex - 1].color == 'b',
           ),
-          const SizedBox(height: 10),
+          if (_servedFromCache)
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.only(
+                bottom: 8,
+              ),
+              padding: const EdgeInsets.symmetric(
+                vertical: 6,
+                horizontal: 10,
+              ),
+              decoration: BoxDecoration(
+                color: Colors.green.withOpacity(0.08),
+                borderRadius:
+                    BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.bolt_rounded,
+                    size: 16,
+                    color: Colors.green.shade700,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'نتائج محفوظة من تحليل سابق لهذه'
+                    ' المباراة — لم يُعَد تشغيل'
+                    ' Stockfish.',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.green.shade800,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           if (_resultText.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(
@@ -1213,8 +1409,8 @@ class _GameAnalysisScreenState
                     },
                     child: BoardWidget(
                       state: _boardState,
-                      boardTheme: boardThemes[1],
-                      pieceTheme: pieceThemes[0],
+                      boardTheme: chessComBoardTheme,
+                      pieceTheme: chessComPieceTheme,
                       onTap: (_) {},
                       arrows: _arrowsForCurrent(),
                       interactive: false,
@@ -1224,7 +1420,14 @@ class _GameAnalysisScreenState
               ),
             ],
           ),
-          const SizedBox(height: 10),
+          _buildChessComPlayerBar(
+            name: _whiteName,
+            pieceColor: 'w',
+            active: _currentIndex > 0 &&
+                _plies.isNotEmpty &&
+                _plies[_currentIndex - 1].color == 'w',
+          ),
+          const SizedBox(height: 8),
           _buildNavControls(),
           if (_fens.length > 1)
             Slider(
@@ -1249,6 +1452,58 @@ class _GameAnalysisScreenState
     );
   }
 
+  Widget _buildChessComPlayerBar({
+    required String name,
+    required String pieceColor,
+    required bool active,
+  }) {
+    final isBlack = pieceColor == 'b';
+    final bg = active ? const Color(0xFF3A3937) : const Color(0xFF2B2927);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      color: bg,
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: isBlack ? const Color(0xFF555351) : Colors.white,
+              borderRadius: BorderRadius.circular(5),
+            ),
+            padding: const EdgeInsets.all(4),
+            child: Image.asset(
+              isBlack
+                  ? 'assets/pieces/chesscom/bP.webp'
+                  : 'assets/pieces/chesscom/wP.webp',
+              fit: BoxFit.contain,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 15,
+                fontWeight: active ? FontWeight.w800 : FontWeight.w600,
+              ),
+            ),
+          ),
+          if (active)
+            const Icon(
+              Icons.circle,
+              size: 8,
+              color: Color(0xFF9BCB4A),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildCurrentMoveInfo() {
     if (_currentIndex == 0) {
       final pv = _pvUci.isNotEmpty
@@ -1259,7 +1514,7 @@ class _GameAnalysisScreenState
         width: double.infinity,
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: Colors.grey.withValues(alpha: 0.06),
+          color: Colors.grey.withOpacity(0.06),
           borderRadius: BorderRadius.circular(12),
         ),
         child: Column(
@@ -1277,7 +1532,7 @@ class _GameAnalysisScreenState
               Text(
                 'الخط المقترح: $pv',
                 style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  color: Colors.grey.shade700,
                   fontSize: 13,
                 ),
               ),
@@ -1319,10 +1574,10 @@ class _GameAnalysisScreenState
       width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: info.color.withValues(alpha: 0.07),
+        color: info.color.withOpacity(0.07),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: info.color.withValues(alpha: 0.3),
+          color: info.color.withOpacity(0.3),
         ),
       ),
       child: Column(
@@ -1359,7 +1614,7 @@ class _GameAnalysisScreenState
                 'خسارة تقييم: '
                 '${(loss / 100).toStringAsFixed(2)}',
                 style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  color: Colors.grey.shade700,
                   fontSize: 12,
                 ),
               ),
@@ -1380,7 +1635,7 @@ class _GameAnalysisScreenState
             Text(
               'الخط الرئيسي: $pv',
               style: TextStyle(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                color: Colors.grey.shade700,
                 fontSize: 12,
               ),
             ),
@@ -1424,7 +1679,7 @@ class _GameAnalysisScreenState
             vertical: 8,
           ),
           decoration: BoxDecoration(
-            color: scheme.primary.withValues(alpha: 0.08),
+            color: scheme.primary.withOpacity(0.08),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Text(
@@ -1471,13 +1726,13 @@ class _GameAnalysisScreenState
     final iconSize = primary ? 28.0 : 22.0;
 
     final bgColor = !enabled
-        ? scheme.onSurface.withValues(alpha: 0.06)
+        ? scheme.onSurface.withOpacity(0.06)
         : primary
             ? scheme.primary
-            : scheme.primary.withValues(alpha: 0.12);
+            : scheme.primary.withOpacity(0.12);
 
     final iconColor = !enabled
-        ? scheme.onSurface.withValues(alpha: 0.28)
+        ? scheme.onSurface.withOpacity(0.28)
         : primary
             ? scheme.onPrimary
             : scheme.primary;
@@ -1506,6 +1761,7 @@ class _GameAnalysisScreenState
 
   Widget _buildAccuracySummary() {
     final acc = _accuracyBySide;
+    final acpl = _acplBySide;
 
     return Container(
       padding: const EdgeInsets.symmetric(
@@ -1513,21 +1769,46 @@ class _GameAnalysisScreenState
         horizontal: 10,
       ),
       decoration: BoxDecoration(
-        color: Colors.grey.withValues(alpha: 0.08),
+        color: Colors.grey.withOpacity(0.08),
         borderRadius: BorderRadius.circular(12),
       ),
-      child: Row(
-        mainAxisAlignment:
-            MainAxisAlignment.spaceAround,
+      child: Column(
         children: [
-          _accuracyChip(_whiteName, acc['w'] ?? 0),
-          _accuracyChip(_blackName, acc['b'] ?? 0),
+          Row(
+            mainAxisAlignment:
+                MainAxisAlignment.spaceAround,
+            children: [
+              _accuracyChip(
+                _whiteName,
+                acc['w'] ?? 0,
+                acpl['w'],
+              ),
+              _accuracyChip(
+                _blackName,
+                acc['b'] ?? 0,
+                acpl['b'],
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'دقة Chess2 — مقياس خاص بالتطبيق، ليس مطابقًا'
+            ' لدقة Chess.com',
+            style: TextStyle(
+              fontSize: 10,
+              color: Colors.grey.shade500,
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _accuracyChip(String label, double acc) {
+  Widget _accuracyChip(
+    String label,
+    double acc,
+    double? acpl,
+  ) {
     return Column(
       children: [
         Text(
@@ -1539,10 +1820,18 @@ class _GameAnalysisScreenState
         ),
         const SizedBox(height: 2),
         Text(
-          'دقة $label',
+          'دقة Chess2 — $label',
           style: TextStyle(
             fontSize: 12,
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
+            color: Colors.grey.shade600,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          'ACPL: ${acpl == null ? 'N/A' : acpl.toStringAsFixed(0)}',
+          style: TextStyle(
+            fontSize: 11,
+            color: Colors.grey.shade500,
           ),
         ),
       ],
@@ -1572,7 +1861,7 @@ class _GameAnalysisScreenState
                 '   •   '
                 '$_blackName ${b.toStringAsFixed(0)}%',
                 style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  color: Colors.grey.shade700,
                 ),
               ),
             ),
@@ -1585,7 +1874,7 @@ class _GameAnalysisScreenState
       width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.grey.withValues(alpha: 0.06),
+        color: Colors.grey.withOpacity(0.06),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
@@ -1632,7 +1921,7 @@ class _GameAnalysisScreenState
       var errorCount = 0;
       double accSum = 0;
 
-      for (var i = 0; i < _plies.length; i++) {
+      for (var i = 0; i < _qualities.length; i++) {
         if (_phaseOf(i) != phase) continue;
 
         moveCount++;
@@ -1679,8 +1968,10 @@ class _GameAnalysisScreenState
     }
 
     final acc = _accuracyBySide;
+    final acplBySide = _acplBySide;
     final countsBySide = _qualityCountsBySide;
-    final bestIdx = _bestMoveIndex;
+    final bestEngineIdx = _bestEngineMoveIndex;
+    final brilliantIdx = _brilliantMoveIndex;
     final worstIdx = _worstMoveIndex;
     final missed = _missedOpportunityIndices;
     final opening = _headers['Opening'];
@@ -1696,7 +1987,7 @@ class _GameAnalysisScreenState
           width: double.infinity,
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: Colors.grey.withValues(alpha: 0.06),
+            color: Colors.grey.withOpacity(0.06),
             borderRadius: BorderRadius.circular(12),
           ),
           child: Column(
@@ -1737,7 +2028,7 @@ class _GameAnalysisScreenState
               color: Theme.of(context)
                   .colorScheme
                   .primary
-                  .withValues(alpha: 0.06),
+                  .withOpacity(0.06),
               borderRadius:
                   BorderRadius.circular(12),
             ),
@@ -1774,8 +2065,8 @@ class _GameAnalysisScreenState
             Expanded(
               child: _playerStatsCard(
                 _whiteName,
-                'w',
                 acc['w'] ?? 0,
+                acplBySide['w'],
                 countsBySide['w']!,
               ),
             ),
@@ -1783,8 +2074,8 @@ class _GameAnalysisScreenState
             Expanded(
               child: _playerStatsCard(
                 _blackName,
-                'b',
                 acc['b'] ?? 0,
+                acplBySide['b'],
                 countsBySide['b']!,
               ),
             ),
@@ -1809,18 +2100,23 @@ class _GameAnalysisScreenState
         const SizedBox(height: 16),
 
         // --------------------------------------------------
-        // أفضل وأسوأ نقلة
+        // أفضل نقلة (Best Engine Move) وأسوأ نقلة
         // --------------------------------------------------
+        // ملاحظة: "أفضل نقلة" هنا تعني النقلة المطابقة فعليًا
+        // لـ bestUci الخاص بـ Stockfish — وليست بالضرورة
+        // النقلة المصنّفة "رائعة!!" (Brilliant قسم منفصل
+        // تمامًا تحته، يظهر فقط إن وُجد فعلًا).
         Row(
           children: [
             Expanded(
               child: _bestWorstCard(
                 title: 'أفضل نقلة',
-                icon: Icons.auto_awesome_rounded,
-                color: const Color(0xFF1BADA6),
-                plyIndex: bestIdx,
+                icon: Icons.star_rounded,
+                color: const Color(0xFF2AA876),
+                plyIndex: bestEngineIdx,
                 emptyText:
-                    'لا توجد أفضل نقلة مؤكدة في بيانات المحرك.',
+                    'لم يتم تحديد أفضل نقلة بارزة في'
+                    ' هذه المباراة.',
                 buttonText: 'عرض النقلة',
               ),
             ),
@@ -1839,6 +2135,17 @@ class _GameAnalysisScreenState
             ),
           ],
         ),
+        if (brilliantIdx != null) ...[
+          const SizedBox(height: 10),
+          _bestWorstCard(
+            title: 'نقلة رائعة!! (Brilliant)',
+            icon: Icons.auto_awesome_rounded,
+            color: const Color(0xFF1BADA6),
+            plyIndex: brilliantIdx,
+            emptyText: '',
+            buttonText: 'عرض النقلة',
+          ),
+        ],
         const SizedBox(height: 16),
 
         // --------------------------------------------------
@@ -1903,8 +2210,8 @@ class _GameAnalysisScreenState
 
   Widget _playerStatsCard(
     String name,
-    String side,
     double accuracy,
+    double? acpl,
     Map<MoveQuality, int> counts,
   ) {
     Widget row(MoveQuality q) {
@@ -1939,7 +2246,7 @@ class _GameAnalysisScreenState
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.grey.withValues(alpha: 0.06),
+        color: Colors.grey.withOpacity(0.06),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
@@ -1961,13 +2268,19 @@ class _GameAnalysisScreenState
             ),
           ),
           const Text(
-            'الدقة',
-            style: TextStyle(fontSize: 11, color: Chess2Theme.muted),
+            'دقة Chess2',
+            style: TextStyle(
+              fontSize: 11,
+              color: Colors.grey,
+            ),
           ),
-          const SizedBox(height: 3),
+          const SizedBox(height: 4),
           Text(
-            'ACPL: ${(_acplBySide[side] ?? 0).toStringAsFixed(0)}',
-            style: const TextStyle(fontSize: 11, color: Chess2Theme.muted, fontWeight: FontWeight.w700),
+            'ACPL: ${acpl == null ? 'N/A' : acpl.toStringAsFixed(0)}',
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
           ),
           const Divider(height: 14),
           row(MoveQuality.excellent),
@@ -1991,10 +2304,10 @@ class _GameAnalysisScreenState
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.06),
+        color: color.withOpacity(0.06),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: color.withValues(alpha: 0.25),
+          color: color.withOpacity(0.25),
         ),
       ),
       child: Column(
@@ -2020,7 +2333,7 @@ class _GameAnalysisScreenState
               emptyText,
               style: TextStyle(
                 fontSize: 12,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                color: Colors.grey.shade700,
               ),
             )
           else ...[
@@ -2038,7 +2351,7 @@ class _GameAnalysisScreenState
               '${(_lossAt(plyIndex) / 100).toStringAsFixed(2)}',
               style: TextStyle(
                 fontSize: 12,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                color: Colors.grey.shade700,
               ),
             ),
             const SizedBox(height: 6),
@@ -2064,7 +2377,7 @@ class _GameAnalysisScreenState
       width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.grey.withValues(alpha: 0.06),
+        color: Colors.grey.withOpacity(0.06),
         borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
@@ -2083,7 +2396,7 @@ class _GameAnalysisScreenState
               '${stat.moveCount} نقلة',
               textAlign: TextAlign.center,
               style: TextStyle(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                color: Colors.grey.shade700,
                 fontSize: 12,
               ),
             ),
@@ -2104,7 +2417,7 @@ class _GameAnalysisScreenState
               style: TextStyle(
                 color: stat.errorCount > 0
                     ? const Color(0xFFD9483D)
-                    : Theme.of(context).colorScheme.onSurfaceVariant,
+                    : Colors.grey.shade700,
                 fontSize: 12,
               ),
             ),
@@ -2147,7 +2460,7 @@ class _GameAnalysisScreenState
               child: Text(
                 '${(i ~/ 2) + 1}.',
                 style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  color: Colors.grey.shade600,
                 ),
               ),
             ),
@@ -2211,8 +2524,8 @@ class _GameAnalysisScreenState
               ? Theme.of(context)
                   .colorScheme
                   .primary
-                  .withValues(alpha: 0.15)
-              : (info?.color.withValues(alpha: 0.10) ??
+                  .withOpacity(0.15)
+              : (info?.color.withOpacity(0.10) ??
                   Colors.transparent),
           borderRadius: BorderRadius.circular(6),
           border: isCurrent
@@ -2341,7 +2654,7 @@ class _GameAnalysisScreenState
       child: ListTile(
         leading: CircleAvatar(
           backgroundColor:
-              info.color.withValues(alpha: 0.15),
+              info.color.withOpacity(0.15),
           child: Icon(info.icon, color: info.color),
         ),
         title: Text(
@@ -2399,7 +2712,7 @@ class _GameAnalysisScreenState
           child: ListTile(
             leading: CircleAvatar(
               backgroundColor:
-                  info.color.withValues(alpha: 0.15),
+                  info.color.withOpacity(0.15),
               child: Text(
                 '${index + 1}',
                 style: TextStyle(
@@ -2484,6 +2797,25 @@ class _EvalBar extends StatelessWidget {
 // ================================================================
 // نتيجة تقييم وضعية واحدة / لحظة حرجة
 // ================================================================
+
+class _Eval {
+  final double pawns;
+  final String label;
+  final String bestUci;
+  final List<String> pv;
+
+  /// تقييم ثاني أفضل نقلة (منظور الأبيض، بوحدة القرن) إن
+  /// توفرت (multiPV=2)، وإلا null.
+  final int? secondBestCpWhite;
+
+  const _Eval(
+    this.pawns,
+    this.label,
+    this.bestUci,
+    this.pv, {
+    this.secondBestCpWhite,
+  });
+}
 
 class _CriticalMoment {
   final int plyIndex;
@@ -2607,9 +2939,9 @@ class _EvalGraphPainter extends CustomPainter {
 
     // الخلفية: نصف فاتح (أبيض أفضل) ونصف غامق (أسود أفضل).
     final whiteBg = Paint()
-      ..color = Colors.grey.withValues(alpha: 0.08);
+      ..color = Colors.grey.withOpacity(0.08);
     final blackBg = Paint()
-      ..color = Colors.grey.withValues(alpha: 0.18);
+      ..color = Colors.grey.withOpacity(0.18);
 
     canvas.drawRect(
       Rect.fromLTWH(0, 0, size.width, mid),
@@ -2621,7 +2953,7 @@ class _EvalGraphPainter extends CustomPainter {
     );
 
     final zeroPaint = Paint()
-      ..color = Colors.grey.withValues(alpha: 0.5)
+      ..color = Colors.grey.withOpacity(0.5)
       ..strokeWidth = 1;
 
     canvas.drawLine(
@@ -2680,7 +3012,7 @@ class _EvalGraphPainter extends CustomPainter {
         Offset(x, 0),
         Offset(x, size.height),
         Paint()
-          ..color = Colors.red.withValues(alpha: 0.4)
+          ..color = Colors.red.withOpacity(0.4)
           ..strokeWidth = 1,
       );
 

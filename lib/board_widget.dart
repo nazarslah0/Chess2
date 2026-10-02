@@ -378,7 +378,7 @@ class BoardWidget extends StatelessWidget {
                                                   .bold,
                                           color: boardTheme
                                               .border
-                                              .withValues(alpha: 
+                                              .withOpacity(
                                                   0.75),
                                         ),
                                       ),
@@ -400,7 +400,7 @@ class BoardWidget extends StatelessWidget {
                                                   .bold,
                                           color: boardTheme
                                               .border
-                                              .withValues(alpha: 
+                                              .withOpacity(
                                                   0.75),
                                         ),
                                       ),
@@ -593,6 +593,11 @@ class _ArrowPainter extends CustomPainter {
     final direction =
         delta / distance;
 
+    final angle = math.atan2(
+      direction.dy,
+      direction.dx,
+    );
+
     // لا نجعل السهم يبدأ من مركز القطعة.
     final startPadding =
         cell * 0.22;
@@ -617,7 +622,7 @@ class _ArrowPainter extends CustomPainter {
 
     final shaftPaint = Paint()
       ..color =
-          color.withValues(alpha: 0.82)
+          color.withOpacity(0.82)
       ..strokeWidth =
           cell * 0.115
       ..strokeCap =
@@ -684,7 +689,7 @@ class _ArrowPainter extends CustomPainter {
 
     final headPaint = Paint()
       ..color =
-          color.withValues(alpha: 0.92)
+          color.withOpacity(0.92)
       ..style =
           PaintingStyle.fill;
 
@@ -758,13 +763,13 @@ class _CheckmateGlowState extends State<_CheckmateGlow>
           decoration: BoxDecoration(
             border: Border.all(
               color: Colors.red
-                  .withValues(alpha: _pulse.value),
+                  .withOpacity(_pulse.value),
               width: 3,
             ),
             boxShadow: [
               BoxShadow(
                 color: Colors.red
-                    .withValues(alpha: _pulse.value * 0.75),
+                    .withOpacity(_pulse.value * 0.75),
                 blurRadius: 14,
                 spreadRadius: 2,
               ),

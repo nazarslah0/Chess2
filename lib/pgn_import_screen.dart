@@ -2,17 +2,22 @@ import 'package:flutter/material.dart';
 
 import 'game_analysis_screen.dart';
 import 'pgn_utils.dart';
-import 'app_theme.dart';
 
+/// شاشة استيراد/لصق PGN لتحليله عبر GameAnalysisScreen نفسها
+/// المستخدمة لمباريات Chess.com وLichess (مصدر واحد للتحليل).
 class PgnImportScreen extends StatefulWidget {
   const PgnImportScreen({super.key});
 
   @override
-  State<PgnImportScreen> createState() => _PgnImportScreenState();
+  State<PgnImportScreen> createState() =>
+      _PgnImportScreenState();
 }
 
-class _PgnImportScreenState extends State<PgnImportScreen> {
-  final TextEditingController _pgnCtrl = TextEditingController();
+class _PgnImportScreenState
+    extends State<PgnImportScreen> {
+  final TextEditingController _pgnCtrl =
+      TextEditingController();
+
   String? _error;
 
   @override
@@ -23,18 +28,29 @@ class _PgnImportScreenState extends State<PgnImportScreen> {
 
   void _analyze() {
     final pgn = _pgnCtrl.text.trim();
+
     if (pgn.isEmpty) {
-      setState(() => _error = 'الصق نص PGN أولًا.');
+      setState(() {
+        _error = 'الصق نص PGN أولًا.';
+      });
       return;
     }
 
     final plies = parsePgnMoves(pgn);
+
     if (plies == null || plies.isEmpty) {
-      setState(() => _error = 'تعذر قراءة هذا الـ PGN. تحقق من الصيغة.');
+      setState(() {
+        _error =
+            'تعذر قراءة نقلات هذا الـ PGN. تحقق من'
+            ' صحة الصيغة.';
+      });
       return;
     }
 
-    setState(() => _error = null);
+    setState(() {
+      _error = null;
+    });
+
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => GameAnalysisScreen(
@@ -48,61 +64,69 @@ class _PgnImportScreenState extends State<PgnImportScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('تحليل مباراة PGN')),
+      appBar: AppBar(
+        title: const Text('استيراد مباراة (PGN)'),
+      ),
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+          padding: const EdgeInsets.all(16),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+            crossAxisAlignment:
+                CrossAxisAlignment.stretch,
             children: [
-              Container(
-                padding: const EdgeInsets.all(15),
-                decoration: BoxDecoration(
-                  color: Chess2Theme.surface,
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: Chess2Theme.border),
-                ),
-                child: const Row(
-                  children: [
-                    Icon(Icons.description_outlined, color: Chess2Theme.blue),
-                    SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('أدخل مباراة', style: TextStyle(fontWeight: FontWeight.w900)),
-                          SizedBox(height: 3),
-                          Text('سنحللها سريعًا ثم نفحص اللحظات المهمة بعمق.', style: TextStyle(color: Chess2Theme.muted, fontSize: 12)),
-                        ],
-                      ),
-                    ),
-                  ],
+              Text(
+                'الصق نص PGN كاملًا (يشمل الرؤوس مثل'
+                ' [White "..."] إن وُجدت والنقلات).',
+                style: TextStyle(
+                  color: Colors.grey.shade600,
                 ),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 10),
               Expanded(
                 child: TextField(
                   controller: _pgnCtrl,
                   maxLines: null,
                   expands: true,
-                  textAlignVertical: TextAlignVertical.top,
-                  style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+                  textAlignVertical:
+                      TextAlignVertical.top,
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 13,
+                  ),
                   decoration: const InputDecoration(
-                    hintText: '[White "Player"]\n[Black "Opponent"]\n[Result "1-0"]\n\n1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 ...',
+                    border: OutlineInputBorder(),
+                    hintText: '[White "Nazar"]\n'
+                        '[Black "Opponent"]\n'
+                        '[Result "1-0"]\n\n'
+                        '1. e4 e5 2. Nf3 Nc6 '
+                        '3. Bb5 a6 ...',
                     alignLabelWithHint: true,
-                    prefixIcon: Padding(padding: EdgeInsets.only(bottom: 240), child: Icon(Icons.code_rounded)),
                   ),
                 ),
               ),
-              if (_error != null) ...[
-                const SizedBox(height: 8),
-                Text(_error!, style: const TextStyle(color: Chess2Theme.red)),
-              ],
+              if (_error != null)
+                Padding(
+                  padding:
+                      const EdgeInsets.symmetric(
+                    vertical: 8,
+                  ),
+                  child: Text(
+                    _error!,
+                    style: const TextStyle(
+                      color: Colors.red,
+                    ),
+                  ),
+                ),
               const SizedBox(height: 10),
-              FilledButton.icon(
-                onPressed: _analyze,
-                icon: const Icon(Icons.bolt_rounded),
-                label: const Text('ابدأ التحليل'),
+              SizedBox(
+                height: 50,
+                child: ElevatedButton.icon(
+                  onPressed: _analyze,
+                  icon: const Icon(
+                    Icons.query_stats_rounded,
+                  ),
+                  label: const Text('تحليل المباراة'),
+                ),
               ),
             ],
           ),

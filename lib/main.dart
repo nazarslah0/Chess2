@@ -7,7 +7,6 @@ import 'board_widget.dart';
 import 'panels.dart';
 import 'sound_service.dart';
 import 'home_screen.dart';
-import 'app_theme.dart';
 
 void main() {
   runApp(
@@ -30,9 +29,16 @@ class ChessAnalyzerApp extends StatelessWidget {
       title: 'محلل وضعيات الشطرنج',
       debugShowCheckedModeBanner: false,
       locale: const Locale('ar'),
-      theme: Chess2Theme.light(),
-      darkTheme: Chess2Theme.dark(),
-      themeMode: ThemeMode.dark,
+      theme: ThemeData(
+        colorSchemeSeed: Colors.indigo,
+        useMaterial3: true,
+      ),
+      darkTheme: ThemeData(
+        colorSchemeSeed: Colors.indigo,
+        useMaterial3: true,
+        brightness: Brightness.dark,
+      ),
+      themeMode: ThemeMode.system,
       // نطبّق RTL على كل الشاشات (بما فيها الشاشات التي
       // تُفتح لاحقًا عبر Navigator.push)، بدل تغليف الشاشة
       // الأولى فقط.
@@ -393,7 +399,7 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
           args['promotion'] = promotion;
         }
         final result = chess.move(args);
-        moved = result != false;
+        moved = result != null && result != false;
       } catch (_) {
         moved = false;
       }
@@ -767,7 +773,7 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
                             'ثيم الرقعة',
                       ),
 
-                      initialValue:
+                      value:
                           boardThemeIdx,
 
                       items: [
@@ -812,7 +818,7 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
                             'ثيم القطع',
                       ),
 
-                      initialValue:
+                      value:
                           pieceThemeIdx,
 
                       items: [
