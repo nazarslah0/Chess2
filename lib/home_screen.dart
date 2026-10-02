@@ -133,7 +133,7 @@ class _MenuButton extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
 
     return Material(
-      color: scheme.primary.withOpacity(0.06),
+      color: scheme.primary.withValues(alpha: 0.06),
       borderRadius: BorderRadius.circular(16),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
@@ -148,7 +148,7 @@ class _MenuButton extends StatelessWidget {
               CircleAvatar(
                 radius: 24,
                 backgroundColor:
-                    scheme.primary.withOpacity(0.15),
+                    scheme.primary.withValues(alpha: 0.15),
                 child: Icon(
                   icon,
                   color: scheme.primary,

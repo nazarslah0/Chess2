@@ -399,7 +399,7 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
           args['promotion'] = promotion;
         }
         final result = chess.move(args);
-        moved = result != null && result != false;
+        moved = result != false;
       } catch (_) {
         moved = false;
       }
@@ -773,7 +773,7 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
                             'ثيم الرقعة',
                       ),
 
-                      value:
+                      initialValue:
                           boardThemeIdx,
 
                       items: [
@@ -818,7 +818,7 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
                             'ثيم القطع',
                       ),
 
-                      value:
+                      initialValue:
                           pieceThemeIdx,
 
                       items: [

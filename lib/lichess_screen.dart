@@ -217,7 +217,7 @@ class _LichessScreenState extends State<LichessScreen> {
                       )
                     : ListView.separated(
                         itemCount: _games.length,
-                        separatorBuilder: (_, __) =>
+                        separatorBuilder: (_, _) =>
                             const Divider(height: 1),
                         itemBuilder:
                             (context, index) {
@@ -266,7 +266,7 @@ class _LichessScreenState extends State<LichessScreen> {
 
     return ListTile(
       leading: CircleAvatar(
-        backgroundColor: color.withOpacity(0.15),
+        backgroundColor: color.withValues(alpha: 0.15),
         child: Icon(icon, color: color),
       ),
       title: Text('ضد $opponent'),

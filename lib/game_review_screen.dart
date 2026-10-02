@@ -278,7 +278,7 @@ class _GameReviewScreenState extends State<GameReviewScreen> {
                   : ListView.separated(
                       padding: const EdgeInsets.fromLTRB(10, 0, 10, 20),
                       itemCount: _games.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 6),
+                      separatorBuilder: (_, _) => const SizedBox(height: 6),
                       itemBuilder: (context, index) => _buildGameTile(_games[index], index),
                     ),
             ),
@@ -380,7 +380,7 @@ class _GameReviewScreenState extends State<GameReviewScreen> {
               const SizedBox(width: 8),
               CircleAvatar(
                 radius: 19,
-                backgroundColor: color.withOpacity(.15),
+                backgroundColor: color.withValues(alpha: .15),
                 child: Icon(icon, color: color, size: 20),
               ),
               const SizedBox(width: 10),

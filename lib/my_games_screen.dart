@@ -80,7 +80,7 @@ class _SourceCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       elevation: 0,
-      color: color.withOpacity(0.08),
+      color: color.withValues(alpha: 0.08),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
       ),
@@ -94,7 +94,7 @@ class _SourceCard extends StatelessWidget {
               CircleAvatar(
                 radius: 26,
                 backgroundColor:
-                    color.withOpacity(0.18),
+                    color.withValues(alpha: 0.18),
                 child: Icon(
                   icon,
                   color: color,
