@@ -25,6 +25,11 @@ class AnalysisCacheEntry {
   /// معلومات الكتاب (Opening Explorer) لكل نقلة، أو null.
   final List<BookMoveInfo?> bookInfo;
 
+  /// احتمال أن يجد لاعب بتصنيف Maia المناسب النقلة المُلعَبة (0..1)،
+  /// وتصنيف Maia المستخدم لكل نقلة. null إن لم تُحسب.
+  final List<double?> maiaProb;
+  final List<int?> maiaBucket;
+
   const AnalysisCacheEntry({
     required this.evalPawns,
     required this.evalLabels,
@@ -36,6 +41,8 @@ class AnalysisCacheEntry {
     required this.moveGapCp,
     this.tbWdlWhite = const <int?>[],
     this.bookInfo = const <BookMoveInfo?>[],
+    this.maiaProb = const <double?>[],
+    this.maiaBucket = const <int?>[],
   });
 }
 

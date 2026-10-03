@@ -14,6 +14,7 @@ import 'uci_utils.dart';
 import 'analysis_cache.dart';
 import 'analysis_result.dart';
 import 'lichess_data_service.dart';
+import 'maia_service.dart';
 import 'pv_material.dart';
 
 /// شاشة تحليل مباراة واحدة — **مصدر واحد للتحليل** تُستخدم من
@@ -87,6 +88,12 @@ class _GameAnalysisScreenState
   /// هل نجح الاتصال بـ Opening Explorer في هذا التحليل؟ إن لم ينجح
   /// نعود لتقدير "كتاب" المحلي القديم.
   bool _explorerAvailable = false;
+
+  /// احتمال أن يجد لاعب بتصنيف Maia المناسب النقلة المُلعَبة (0..1)
+  /// وتصنيف Maia المستخدم، لكل نقلة. null إن لم تُحسب (Maia تُحسب
+  /// فقط للنقلات "الأفضل" وعند توفر ملفات الأوزان).
+  List<double?> _maiaProb = <double?>[];
+  List<int?> _maiaBucket = <int?>[];
 
   /// منظور موحّد لنتائج التحليل (انظر analysis_result.dart) —
   /// يُبنى بعد اكتمال التحليل، ويشكّل الأساس الذي يمكن أن
@@ -169,6 +176,8 @@ class _GameAnalysisScreenState
         List<int?>.filled(_fens.length, null);
     _bookInfo =
         List<BookMoveInfo?>.filled(_plies.length, null);
+    _maiaProb = List<double?>.filled(_plies.length, null);
+    _maiaBucket = List<int?>.filled(_plies.length, null);
 
     _boardState.loadFen(_fens.first);
 
@@ -202,6 +211,12 @@ class _GameAnalysisScreenState
 
       if (cached.bookInfo.length == _plies.length) {
         _bookInfo = List<BookMoveInfo?>.from(cached.bookInfo);
+      }
+
+      if (cached.maiaProb.length == _plies.length &&
+          cached.maiaBucket.length == _plies.length) {
+        _maiaProb = List<double?>.from(cached.maiaProb);
+        _maiaBucket = List<int?>.from(cached.maiaBucket);
       }
       _analysisResults = _buildAnalysisResults();
       _analyzedCount = _fens.length;
@@ -392,6 +407,119 @@ class _GameAnalysisScreenState
 
       if (!info.isBook) return;
     }
+  }
+
+  String _plyUci(int i) =>
+      '${_plies[i].from}${_plies[i].to}${_plies[i].promotion ?? ''}';
+
+  /// يشغّل Maia على النقلات المصنّفة "أفضل" (وطابقت نقلة Stockfish)،
+  /// بأوزان أقرب مستوى لتصنيف كل لاعب (من ترويسة PGN: WhiteElo /
+  /// BlackElo، وإلا 1500). إن كان احتمال أن يجدها لاعب بهذا المستوى
+  /// منخفضًا، وكانت متفوقة بوضوح على البديل التالي في وضعية لم تُحسم،
+  /// تصبح "رائعة". أي فشل (لا أوزان، لا محرك) يتخطى Maia بصمت.
+  Future<void> _applyMaiaGreat(
+    int token,
+    List<MoveQuality> qualities,
+  ) async {
+    if (_cancelRequested) return;
+
+    final byBucket = <int, List<int>>{};
+
+    for (var i = 0; i < qualities.length; i++) {
+      if (qualities[i] != MoveQuality.best) continue;
+      if (!_isBestEngineMove[i]) continue;
+
+      final elo = int.tryParse(
+        _headers[_plies[i].color == 'w' ? 'WhiteElo' : 'BlackElo'] ??
+            '',
+      );
+
+      byBucket
+          .putIfAbsent(MaiaService.bucketForElo(elo), () => <int>[])
+          .add(i);
+    }
+
+    if (byBucket.isEmpty) return;
+
+    for (final entry in byBucket.entries) {
+      if (!mounted || token != _requestToken || _cancelRequested) {
+        return;
+      }
+
+      final session = await MaiaSession.open(entry.key);
+
+      if (session == null) continue;
+
+      try {
+        for (final i in entry.value) {
+          if (!mounted ||
+              token != _requestToken ||
+              _cancelRequested) {
+            return;
+          }
+
+          final policy = await session.policy(
+            startFen: _fens.first,
+            movesUci: <String>[
+              for (var k = 0; k < i; k++) _plyUci(k),
+            ],
+          );
+
+          final prob = policy?[_plyUci(i)];
+
+          if (prob == null) continue;
+
+          _maiaProb[i] = prob;
+          _maiaBucket[i] = entry.key;
+
+          if (_isMaiaGreat(i, prob)) {
+            qualities[i] = MoveQuality.great;
+          }
+        }
+      } finally {
+        await session.close();
+      }
+    }
+  }
+
+  bool _isMaiaGreat(int i, double prob) {
+    if (prob > MaiaService.greatMaxProb) return false;
+
+    final p = _plies[i];
+
+    if (_legalMoveCount(p.fenBefore) <= 1) return false;
+
+    final second = _secondBestCpWhite[i];
+
+    if (second == null) return false;
+
+    final wpBest = winPercentWhite(_cpAt(i));
+    final wpSecond = winPercentWhite(second);
+
+    final moverBest = p.color == 'w' ? wpBest : 100 - wpBest;
+    final moverSecond = p.color == 'w' ? wpSecond : 100 - wpSecond;
+
+    // وضعية محسومة: لا معنى لـ"رائعة".
+    if (moverBest < 8 || moverBest > 92) return false;
+
+    return (moverBest - moverSecond) >= MaiaService.greatMinGapWinPct;
+  }
+
+  String? _maiaNoteAt(int k) {
+    if (k < 0 || k >= _maiaProb.length) return null;
+
+    final prob = _maiaProb[k];
+    final bucket = _maiaBucket[k];
+
+    if (prob == null || bucket == null) return null;
+
+    final pct = prob * 100;
+
+    final shown =
+        pct < 1 ? 'أقل من 1' : pct.toStringAsFixed(0);
+
+    return 'Maia $bucket: يجد هذه النقلة $shown% من اللاعبين '
+        'بهذا التصنيف';
   }
 
   String? _tbNoteAt(int k) {
@@ -636,6 +764,9 @@ class _GameAnalysisScreenState
       qualities.add(quality);
     }
 
+    // Maia: نقلة "أفضل" لن يجدها لاعب بهذا التصنيف تُرفع إلى "رائعة".
+    await _applyMaiaGreat(token, qualities);
+
     if (!mounted || token != _requestToken) {
       return;
     }
@@ -672,6 +803,8 @@ class _GameAnalysisScreenState
           moveGapCp: List<int?>.from(_moveGapCp),
           tbWdlWhite: List<int?>.from(_tbWdlWhite),
           bookInfo: List<BookMoveInfo?>.from(_bookInfo),
+          maiaProb: List<double?>.from(_maiaProb),
+          maiaBucket: List<int?>.from(_maiaBucket),
         ),
       );
     }
@@ -2807,6 +2940,16 @@ class _GameAnalysisScreenState
               _bookNoteAt(k)!,
               style: TextStyle(
                 color: moveQualityInfo[MoveQuality.book]!.color,
+                fontSize: 12,
+              ),
+            ),
+          ],
+          if (_maiaNoteAt(k) != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              _maiaNoteAt(k)!,
+              style: const TextStyle(
+                color: Colors.white70,
                 fontSize: 12,
               ),
             ),

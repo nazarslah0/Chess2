@@ -404,12 +404,12 @@ class OpeningExplorerService {
 
     final wanted = normalizeSan(san);
 
-    final mastersGames = masters?.gamesFor(wanted) ?? 0;
+    final mastersGames = masters.gamesFor(wanted);
 
     return BookMoveInfo(
       isBook: mastersGames >= minMasterGames,
       mastersGames: mastersGames,
-      mastersPositionGames: masters?.total ?? 0,
+      mastersPositionGames: masters.total,
       lichessGames: lichess?.gamesFor(wanted),
       lichessPositionGames: lichess?.total,
     );
