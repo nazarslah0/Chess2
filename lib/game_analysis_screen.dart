@@ -94,6 +94,11 @@ class _GameAnalysisScreenState
   bool _showArrows = true;
   bool _showEval = true;
   bool _showCoords = true;
+  bool _showBadges = true;
+
+  // false = نعرض شاشة التحليل ثم صفحة الإحصائيات؛ true = المراجعة
+  // على الرقعة (الأسهم والعلامات لا تظهر قبل ذلك أبدًا).
+  bool _reviewStarted = false;
 
   // شريط النقلات الأفقي + نافذة المراجعة.
   final ScrollController _stripCtrl = ScrollController();
@@ -393,7 +398,25 @@ class _GameAnalysisScreenState
 
         if (upgraded != null) {
           quality = upgraded;
+        } else if (isGreatCandidate(
+          cpBeforeWhite: cpBefore,
+          secondBestCpWhite: secondBestWhite,
+          color: p.color,
+          onlyLegalMove: _legalMoveCount(p.fenBefore) <= 1,
+        )) {
+          quality = MoveQuality.great;
         }
+      }
+
+      // "كتاب": تقريب لنقلات الافتتاح النظرية (لا توجد قاعدة بيانات
+      // افتتاحات داخل التطبيق): أول 5 نقلات لكل لاعب، وضعية متكافئة،
+      // والنقلة هي الأفضل أو شبه الأفضل — دون تأثير على الدقة.
+      if (i < 10 &&
+          (quality == MoveQuality.best ||
+              quality == MoveQuality.excellent) &&
+          cpBefore.abs() <= 60 &&
+          cpAfter.abs() <= 60) {
+        quality = MoveQuality.book;
       }
 
       qualities.add(quality);
@@ -454,6 +477,16 @@ class _GameAnalysisScreenState
   // ============================================================
   // كشف تقريبي لنقلة "رائعة!!" (تضحية حقيقية + أفضل نقلة)
   // ============================================================
+
+  int _legalMoveCount(String fen) {
+    try {
+      final g = ch.Chess();
+      g.load(fen);
+      return g.moves().length;
+    } catch (_) {
+      return 2;
+    }
+  }
 
   MoveQuality? _tryUpgradeToBrilliant({
     required PgnPly ply,
@@ -655,6 +688,8 @@ class _GameAnalysisScreenState
     switch (q) {
       case MoveQuality.brilliant:
         return '!!';
+      case MoveQuality.great:
+        return '!';
       case MoveQuality.inaccuracy:
         return '?!';
       case MoveQuality.mistake:
@@ -707,56 +742,65 @@ class _GameAnalysisScreenState
     );
   }
 
+  /// سهم واحد فقط: أفضل نقلة يقترحها المحرك. لا نرسم أبدًا سهم
+  /// النقلة التي لُعبت، ولا نرسم شيئًا قبل الضغط على "متابعة
+  /// المراجعة".
   List<BoardArrow> _arrowsForCurrent() {
-    if (_plies.isEmpty || _fens.isEmpty) {
+    if (!_reviewStarted ||
+        _plies.isEmpty ||
+        _fens.isEmpty) {
       return const <BoardArrow>[];
-    }
-
-    final arrows = <BoardArrow>[];
-
-    if (_currentIndex == 0) {
-      if (_bestUci.isNotEmpty &&
-          _bestUci[0].length >= 4) {
-        arrows.add(
-          _decodeArrow(
-            _bestUci[0],
-            Colors.green.withValues(alpha: 0.85),
-          ),
-        );
-      }
-
-      return arrows;
     }
 
     final k = _currentIndex - 1;
 
-    if (k < _qualities.length) {
-      final ply = _plies[k];
-      final color =
-          moveQualityInfo[_qualities[k]]!.color;
+    // الوضعية الابتدائية: أفضل نقلة للأبيض.
+    final idx = _currentIndex == 0 ? 0 : k;
 
-      arrows.add(
-        BoardArrow(
-          from: ply.from,
-          to: ply.to,
-          color: color,
-        ),
-      );
+    if (_currentIndex > 0) {
+      if (k >= _qualities.length ||
+          k >= _isBestEngineMove.length) {
+        return const <BoardArrow>[];
+      }
 
-      if (_qualities[k] != MoveQuality.best &&
-          _qualities[k] != MoveQuality.brilliant &&
-          k < _bestUci.length &&
-          _bestUci[k].length >= 4) {
-        arrows.add(
-          _decodeArrow(
-            _bestUci[k],
-            Colors.green.withValues(alpha: 0.85),
-          ),
-        );
+      // لعب الأفضل أو نقلة كتاب: لا حاجة لسهم.
+      if (_isBestEngineMove[k] ||
+          _qualities[k] == MoveQuality.book) {
+        return const <BoardArrow>[];
       }
     }
 
-    return arrows;
+    if (idx >= _bestUci.length || _bestUci[idx].length < 4) {
+      return const <BoardArrow>[];
+    }
+
+    return [
+      _decodeArrow(
+        _bestUci[idx],
+        const Color(0xFF81B64C).withValues(alpha: 0.9),
+      ),
+    ];
+  }
+
+  /// علامة جودة النقلة فوق القطعة المتحركة (الزاوية العلوية
+  /// اليمنى) — بعد بدء المراجعة فقط.
+  List<BoardBadge> _badgesForCurrent() {
+    if (!_reviewStarted || !_showBadges || _currentIndex <= 0) {
+      return const <BoardBadge>[];
+    }
+
+    final k = _currentIndex - 1;
+
+    if (k >= _qualities.length || k >= _plies.length) {
+      return const <BoardBadge>[];
+    }
+
+    return [
+      BoardBadge(
+        square: _plies[k].to,
+        quality: _qualities[k],
+      ),
+    ];
   }
 
   // ============================================================
@@ -848,32 +892,46 @@ class _GameAnalysisScreenState
     return 'middlegame';
   }
 
+  /// دقة كل نقلة ووزنها (تقلّب الوضعية) للنقلات المحلَّلة فعليًا.
+  MoveAccuracyData get _accData {
+    final m = _qualities.length;
+
+    if (m == 0 || _evalPawns.length < m + 1) {
+      return const MoveAccuracyData(
+        accuracy: <double>[],
+        weight: <double>[],
+      );
+    }
+
+    return computeMoveAccuracyData(
+      cpWhite: [
+        for (var i = 0; i <= m; i++)
+          cpFromWhitePerspective(_evalPawns[i], _evalLabels[i]),
+      ],
+      sides: [
+        for (var i = 0; i < m; i++) _plies[i].color,
+      ],
+    );
+  }
+
+  /// دقة المباراة لكل لاعب بالطريقة الصارمة (متوسط مرجَّح +
+  /// متوافق) — انظر computeMoveAccuracyData في game_review_models.
   Map<String, double> get _accuracyBySide {
     if (_qualities.isEmpty) {
       return {'w': 0, 'b': 0};
     }
 
-    double whiteSum = 0, blackSum = 0;
-    int whiteN = 0, blackN = 0;
-
-    // نقتصر على النقلات التي حُلِّلت فعليًا (قد تكون أقصر من
-    // _plies.length إذا أُلغي التحليل منتصف الطريق) — لا نخترع
-    // دقة لنقلات لم تُحلَّل بعد.
-    for (var i = 0; i < _qualities.length; i++) {
-      final acc = _accuracyAt(i);
-
-      if (_plies[i].color == 'w') {
-        whiteSum += acc;
-        whiteN++;
-      } else {
-        blackSum += acc;
-        blackN++;
-      }
-    }
+    final data = _accData;
 
     return {
-      'w': whiteN > 0 ? whiteSum / whiteN : 0,
-      'b': blackN > 0 ? blackSum / blackN : 0,
+      'w': combineAccuracy(data, [
+        for (var i = 0; i < _qualities.length; i++)
+          if (_plies[i].color == 'w') i,
+      ]),
+      'b': combineAccuracy(data, [
+        for (var i = 0; i < _qualities.length; i++)
+          if (_plies[i].color == 'b') i,
+      ]),
     };
   }
 
@@ -1251,6 +1309,20 @@ class _GameAnalysisScreenState
       );
     }
 
+    if (!_reviewStarted) {
+      return Theme(
+        data: _darkTheme(),
+        child: Scaffold(
+          backgroundColor: _bg,
+          body: SafeArea(
+            child: _analyzing
+                ? _buildAnalyzingView()
+                : _buildSummaryView(),
+          ),
+        ),
+      );
+    }
+
     final topColor = _boardState.flipped ? 'w' : 'b';
     final bottomColor = _boardState.flipped ? 'b' : 'w';
 
@@ -1292,6 +1364,370 @@ class _GameAnalysisScreenState
           ),
         ),
       ),
+    );
+  }
+
+
+  // ============================================================
+  // مرحلة 1: التحليل  →  مرحلة 2: صفحة الإحصائيات  →  المراجعة
+  // ============================================================
+
+  void _startReview({int index = 0}) {
+    setState(() {
+      _reviewStarted = true;
+    });
+
+    _goTo(index);
+  }
+
+  Widget _buildStageTopBar(String title) {
+    return Container(
+      height: 56,
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      child: Row(
+        children: [
+          IconButton(
+            onPressed: () => Navigator.of(context).maybePop(),
+            icon: const Icon(
+              Icons.arrow_back_rounded,
+              textDirection: TextDirection.ltr,
+              color: Colors.white70,
+              size: 30,
+            ),
+          ),
+          Expanded(
+            child: Center(
+              child: Text(
+                title,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 48),
+        ],
+      ),
+    );
+  }
+
+  /// أثناء التحليل: الرقعة بلا أسهم ولا علامات + شريط تقدّم.
+  Widget _buildAnalyzingView() {
+    return LayoutBuilder(
+      builder: (context, c) {
+        final side = math.min(
+          c.maxWidth - 32,
+          math.max(160.0, c.maxHeight - 260),
+        );
+
+        return Column(
+          children: [
+            _buildStageTopBar('مراجعة المباراة'),
+            const Spacer(),
+            SizedBox(
+              width: side,
+              height: side,
+              child: _buildBoard(),
+            ),
+            const SizedBox(height: 24),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: LinearProgressIndicator(
+                value: _progress,
+                minHeight: 8,
+                borderRadius: BorderRadius.circular(4),
+                color: _green,
+                backgroundColor: const Color(0xFF3A3937),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'جارٍ تحليل المباراة... '
+              '$_analyzedCount من ${_fens.length}'
+              ' (${(_progress * 100).round()}%)',
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 14,
+              ),
+            ),
+            TextButton(
+              onPressed: _cancelAnalysis,
+              child: const Text('إلغاء التحليل'),
+            ),
+            const Spacer(),
+          ],
+        );
+      },
+    );
+  }
+
+  /// صفحة الإحصائيات بعد انتهاء التحليل (على طراز chess.com):
+  /// رسم التقييم، الدقة، وعدد النقلات من كل تصنيف لكل لاعب.
+  Widget _buildSummaryView() {
+    final acc = _accuracyBySide;
+    final counts = _qualityCountsBySide;
+
+    final accW = acc['w'] ?? 0;
+    final accB = acc['b'] ?? 0;
+
+    final result = _headers['Result'] ?? '';
+    final whiteWon = result == '1-0';
+    final blackWon = result == '0-1';
+
+    Widget cell(Widget child) => Center(child: child);
+
+    Widget row({
+      required Widget label,
+      required Widget black,
+      required Widget mid,
+      required Widget white,
+    }) {
+      // RTL: أول عنصر في أقصى اليمين → (العنوان، الأسود، الوسط، الأبيض).
+      return Row(
+        children: [
+          Expanded(flex: 7, child: label),
+          Expanded(flex: 3, child: black),
+          Expanded(flex: 3, child: mid),
+          Expanded(flex: 3, child: white),
+        ],
+      );
+    }
+
+    Widget labelText(String s) => Text(
+          s,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 17,
+            fontWeight: FontWeight.w600,
+          ),
+        );
+
+    Widget playerHead({
+      required String name,
+      required String color,
+      required bool winner,
+    }) {
+      final isWhite = color == 'w';
+
+      return Column(
+        children: [
+          Text(
+            name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textDirection: TextDirection.ltr,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            width: 76,
+            height: 76,
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: isWhite
+                  ? const Color(0xFFE8E8E8)
+                  : const Color(0xFF5A5856),
+              borderRadius: BorderRadius.circular(6),
+              border: winner
+                  ? Border.all(color: _green, width: 3)
+                  : null,
+            ),
+            child: Image.asset(
+              chessComPieceTheme.assetPath(color, 'P'),
+              fit: BoxFit.contain,
+            ),
+          ),
+        ],
+      );
+    }
+
+    Widget accBox(double value, bool higher) {
+      return Container(
+        width: 92,
+        height: 52,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: higher
+              ? const Color(0xFFF0F0F0)
+              : const Color(0xFF454341),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Text(
+          value.toStringAsFixed(1),
+          textDirection: TextDirection.ltr,
+          style: TextStyle(
+            color: higher
+                ? const Color(0xFF262522)
+                : Colors.white,
+            fontSize: 24,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      );
+    }
+
+    final whiteHigher = accW > accB;
+    final blackHigher = accB > accW;
+
+    return Column(
+      children: [
+        _buildStageTopBar('مراجعة المباراة'),
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+            child: Column(
+              children: [
+                // ---------------- رسم التقييم ----------------
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: SizedBox(
+                    height: 104,
+                    width: double.infinity,
+                    child: LayoutBuilder(
+                      builder: (context, c) {
+                        return GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTapUp: (d) {
+                            if (_fens.length < 2 || c.maxWidth <= 0) {
+                              return;
+                            }
+
+                            final idx = (d.localPosition.dx /
+                                    c.maxWidth *
+                                    (_fens.length - 1))
+                                .round()
+                                .clamp(0, _fens.length - 1);
+
+                            _startReview(index: idx);
+                          },
+                          child: CustomPaint(
+                            painter: _SummaryGraphPainter(
+                              evalPawns: _evalPawns,
+                              qualities: _qualities,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+
+                // ---------------- اللاعبان ----------------
+                row(
+                  label: labelText('اللاعبَين'),
+                  black: cell(
+                    playerHead(
+                      name: _blackName,
+                      color: 'b',
+                      winner: blackWon,
+                    ),
+                  ),
+                  mid: const SizedBox(),
+                  white: cell(
+                    playerHead(
+                      name: _whiteName,
+                      color: 'w',
+                      winner: whiteWon,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // ---------------- الدقة ----------------
+                row(
+                  label: labelText('الدقة'),
+                  black: cell(accBox(accB, blackHigher)),
+                  mid: const SizedBox(),
+                  white: cell(accBox(accW, whiteHigher)),
+                ),
+                const SizedBox(height: 16),
+                const Divider(color: Color(0xFF45433F), height: 1),
+                const SizedBox(height: 8),
+
+                // ---------------- عدد النقلات لكل تصنيف ----------------
+                for (final q in moveQualityDisplayOrder)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: row(
+                      label: labelText(moveQualityInfo[q]!.label),
+                      black: cell(
+                        Text(
+                          '${counts['b']![q] ?? 0}',
+                          style: TextStyle(
+                            color: moveQualityInfo[q]!.color,
+                            fontSize: 28,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                      mid: cell(QualityBadge(quality: q, size: 34)),
+                      white: cell(
+                        Text(
+                          '${counts['w']![q] ?? 0}',
+                          style: TextStyle(
+                            color: moveQualityInfo[q]!.color,
+                            fontSize: 28,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                if (_cancelled)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: Text(
+                      'تم إلغاء التحليل عند النقلة $_analyzedCount'
+                      ' من ${_fens.length}، فالإحصائيات تخص النقلات'
+                      ' المحلَّلة فقط.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.orange.shade300,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+
+        // ---------------- متابعة المراجعة ----------------
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
+          child: Material(
+            color: _green,
+            borderRadius: BorderRadius.circular(10),
+            elevation: 3,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: _startReview,
+              child: const SizedBox(
+                width: double.infinity,
+                height: 60,
+                child: Center(
+                  child: Text(
+                    'متابعة المراجعة',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1560,6 +1996,7 @@ class _GameAnalysisScreenState
         arrows: _showArrows
             ? _arrowsForCurrent()
             : const <BoardArrow>[],
+        badges: _badgesForCurrent(),
         showCoordinates: _showCoords,
         interactive: false,
       ),
@@ -1639,7 +2076,7 @@ class _GameAnalysisScreenState
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
-                  acc == null ? '—' : '${acc.toStringAsFixed(0)}%',
+                  acc == null ? '—' : '${acc.toStringAsFixed(1)}',
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 20,
@@ -1836,6 +2273,17 @@ class _GameAnalysisScreenState
                         setSheet(() {});
                         setState(() {
                           _showArrows = v;
+                        });
+                      },
+                    ),
+                    SwitchListTile(
+                      secondary: const Icon(Icons.stars_rounded),
+                      title: const Text('إظهار علامات النقلات'),
+                      value: _showBadges,
+                      onChanged: (v) {
+                        setSheet(() {});
+                        setState(() {
+                          _showBadges = v;
                         });
                       },
                     ),
@@ -2059,8 +2507,11 @@ class _GameAnalysisScreenState
         : '';
 
     final isBestOrBrilliant =
+        (k < _isBestEngineMove.length && _isBestEngineMove[k]) ||
         q == MoveQuality.best ||
-        q == MoveQuality.brilliant;
+        q == MoveQuality.brilliant ||
+        q == MoveQuality.great ||
+        q == MoveQuality.book;
 
     return Container(
       width: double.infinity,
@@ -2297,13 +2748,14 @@ class _GameAnalysisScreenState
     ]) {
       var moveCount = 0;
       var errorCount = 0;
-      double accSum = 0;
+      final phaseIdx = <int>[];
+      final accData = _accData;
 
       for (var i = 0; i < _qualities.length; i++) {
         if (_phaseOf(i) != phase) continue;
 
         moveCount++;
-        accSum += _accuracyAt(i);
+        phaseIdx.add(i);
 
         final q = _qualities[i];
 
@@ -2316,8 +2768,9 @@ class _GameAnalysisScreenState
 
       result[phase] = _PhaseStat(
         moveCount: moveCount,
-        accuracy:
-            moveCount > 0 ? accSum / moveCount : 0,
+        accuracy: moveCount > 0
+            ? combineAccuracy(accData, phaseIdx)
+            : 0,
         errorCount: errorCount,
       );
     }
@@ -2516,7 +2969,7 @@ class _GameAnalysisScreenState
         if (brilliantIdx != null) ...[
           const SizedBox(height: 10),
           _bestWorstCard(
-            title: 'نقلة رائعة!! (Brilliant)',
+            title: 'نقلة مدهشة!! (Brilliant)',
             icon: Icons.auto_awesome_rounded,
             color: const Color(0xFF1BADA6),
             plyIndex: brilliantIdx,
@@ -2661,11 +3114,7 @@ class _GameAnalysisScreenState
             ),
           ),
           const Divider(height: 14),
-          row(MoveQuality.excellent),
-          row(MoveQuality.good),
-          row(MoveQuality.inaccuracy),
-          row(MoveQuality.mistake),
-          row(MoveQuality.blunder),
+          for (final q in moveQualityDisplayOrder) row(q),
         ],
       ),
     );
@@ -3449,5 +3898,92 @@ class _BarButtonState extends State<_BarButton> {
         ),
       ),
     );
+  }
+}
+
+
+/// رسم التقييم في صفحة الإحصائيات: خلفية داكنة، والمنطقة تحت الخط
+/// بيضاء (كلما ارتفع الخط كان الأبيض أفضل)، ونقاط ملوّنة عند
+/// الأخطاء والخطأ الفادح والفرص الضائعة.
+class _SummaryGraphPainter extends CustomPainter {
+  final List<double> evalPawns;
+  final List<MoveQuality> qualities;
+
+  const _SummaryGraphPainter({
+    required this.evalPawns,
+    required this.qualities,
+  });
+
+  static const double _cap = 5.0;
+
+  double _x(int i, int n, double w) =>
+      n <= 1 ? 0 : (i / (n - 1)) * w;
+
+  double _y(double pawns, double h) {
+    final c = pawns.clamp(-_cap, _cap).toDouble();
+    final mid = h / 2;
+    return mid - (c / _cap) * mid;
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final n = evalPawns.length;
+
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()..color = const Color(0xFF454341),
+    );
+
+    if (n < 2) return;
+
+    final path = Path()..moveTo(0, _y(evalPawns[0], size.height));
+
+    for (var i = 1; i < n; i++) {
+      path.lineTo(
+        _x(i, n, size.width),
+        _y(evalPawns[i], size.height),
+      );
+    }
+
+    path
+      ..lineTo(size.width, size.height)
+      ..lineTo(0, size.height)
+      ..close();
+
+    canvas.drawPath(
+      path,
+      Paint()..color = const Color(0xFFF0F0F0),
+    );
+
+    canvas.drawLine(
+      Offset(0, size.height / 2),
+      Offset(size.width, size.height / 2),
+      Paint()
+        ..color = const Color(0xFF9A9895)
+        ..strokeWidth = 1,
+    );
+
+    for (var i = 0; i < qualities.length && i + 1 < n; i++) {
+      final q = qualities[i];
+
+      if (q == MoveQuality.blunder ||
+          q == MoveQuality.mistake ||
+          q == MoveQuality.miss) {
+        canvas.drawCircle(
+          Offset(
+            _x(i + 1, n, size.width),
+            _y(evalPawns[i + 1], size.height),
+          ),
+          5,
+          Paint()..color = moveQualityInfo[q]!.color,
+        );
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _SummaryGraphPainter old) {
+    return old.evalPawns != evalPawns ||
+        old.qualities != qualities;
   }
 }

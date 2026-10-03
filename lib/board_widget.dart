@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'models.dart';
+import 'game_review_models.dart';
 import 'piece_painter.dart';
 
 class BoardArrow {
@@ -14,6 +15,18 @@ class BoardArrow {
     required this.from,
     required this.to,
     this.color = Colors.blueAccent,
+  });
+}
+
+/// علامة جودة تُرسم على الزاوية العلوية اليمنى للمربع [square]
+/// (فوق القطعة المتحركة) — نجمة، !!، ؟، ؟؟ ... إلخ.
+class BoardBadge {
+  final String square;
+  final MoveQuality quality;
+
+  const BoardBadge({
+    required this.square,
+    required this.quality,
   });
 }
 
@@ -31,6 +44,9 @@ class BoardWidget extends StatelessWidget {
   final List<BoardArrow> arrows;
 
   final Set<String> targets;
+
+  /// علامات جودة النقلة فوق القطع (مراجعة المباراة فقط).
+  final List<BoardBadge> badges;
 
   final bool showCoordinates;
 
@@ -51,6 +67,7 @@ class BoardWidget extends StatelessWidget {
     this.arrowTo,
     this.arrows = const [],
     this.targets = const {},
+    this.badges = const [],
     this.showCoordinates = true,
     this.interactive = true,
   });
@@ -436,12 +453,61 @@ class BoardWidget extends StatelessWidget {
                           ),
                         ),
                       ),
+
+                  // ==================================================
+                  // علامات جودة النقلة (الزاوية العلوية اليمنى للقطعة)
+                  // ==================================================
+
+                  for (final badge in badges)
+                    if (_validSquare(badge.square))
+                      _badgePositioned(
+                        badge: badge,
+                        cell: cell,
+                        size: size,
+                        flipped: flipped,
+                      ),
                 ],
               ),
               ),
             ),
           );
         },
+      ),
+    );
+  }
+
+  Widget _badgePositioned({
+    required BoardBadge badge,
+    required double cell,
+    required double size,
+    required bool flipped,
+  }) {
+    final fileIndex = files.indexOf(badge.square[0]);
+    final rankIndex = int.parse(badge.square[1]) - 1;
+
+    final col = flipped ? 7 - fileIndex : fileIndex;
+    final row = flipped ? rankIndex : 7 - rankIndex;
+
+    final d = cell * 0.44;
+
+    final left = ((col + 1) * cell - d * 0.80)
+        .clamp(0.0, size - d)
+        .toDouble();
+
+    final top = (row * cell - d * 0.20)
+        .clamp(0.0, size - d)
+        .toDouble();
+
+    return Positioned(
+      left: left,
+      top: top,
+      width: d,
+      height: d,
+      child: IgnorePointer(
+        child: QualityBadge(
+          quality: badge.quality,
+          size: d,
+        ),
       ),
     );
   }
