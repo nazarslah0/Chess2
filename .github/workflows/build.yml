@@ -773,11 +773,17 @@ jobs:
       # =========================================================
       - name: Build ARM64 release APK
         shell: bash
+        env:
+          # اختياري: Personal API Token من Lichess (مجاني، بلا صلاحيات)
+          # لطلبات Opening Explorer. أضِفه كسر باسم LICHESS_TOKEN في
+          # Settings > Secrets. إن لم يوجد يبقى فارغًا والتطبيق يعمل.
+          LICHESS_TOKEN: ${{ secrets.LICHESS_TOKEN }}
         run: |
 
           flutter build apk \
             --release \
-            --target-platform android-arm64
+            --target-platform android-arm64 \
+            --dart-define=LICHESS_TOKEN="$LICHESS_TOKEN"
 
       # =========================================================
       # Show APK
