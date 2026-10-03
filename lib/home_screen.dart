@@ -1,14 +1,23 @@
 import 'package:flutter/material.dart';
 
 import 'main.dart' show PositionAnalyzerScreen;
-import 'pgn_import_screen.dart';
+import 'maia_play_screen.dart';
 import 'my_games_screen.dart';
+import 'pgn_import_screen.dart';
+import 'puzzles_screen.dart';
+import 'settings_screen.dart';
 
 /// الشاشة الرئيسية الحقيقية للتطبيق (القائمة الأساسية).
 /// الرقعة والتحليل التفصيلي يبقيان في شاشات فرعية منفصلة،
 /// حتى لا تزدحم الشاشة الرئيسية.
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
+
+  void _open(BuildContext context, Widget screen) {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => screen),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -19,15 +28,12 @@ class HomeScreen extends StatelessWidget {
       ),
       body: SafeArea(
         child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(
-              maxWidth: 420,
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(20),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(20),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
               child: Column(
-                mainAxisAlignment:
-                    MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
                 children: [
                   const Icon(
                     Icons.grid_4x4_rounded,
@@ -42,68 +48,50 @@ class HomeScreen extends StatelessWidget {
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 28),
                   _MenuButton(
                     icon: Icons.grid_view_rounded,
                     label: 'تحليل وضعية',
-                    subtitle:
-                        'أنشئ وضعية أو الصق FEN وحلّلها'
-                        ' بـ Stockfish',
-                    onTap: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) =>
-                              const PositionAnalyzerScreen(),
-                        ),
-                      );
-                    },
+                    subtitle: 'أنشئ وضعية أو الصق FEN: Stockfish '
+                        'والكتاب وTablebase وMaia',
+                    onTap: () =>
+                        _open(context, const PositionAnalyzerScreen()),
                   ),
                   const SizedBox(height: 14),
                   _MenuButton(
                     icon: Icons.query_stats_rounded,
                     label: 'تحليل مباراة',
-                    subtitle:
-                        'الصق PGN مباراة كاملة وحلّلها'
-                        ' نقلة نقلة',
-                    onTap: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) =>
-                              const PgnImportScreen(),
-                        ),
-                      );
-                    },
+                    subtitle: 'الصق PGN مباراة كاملة وحلّلها نقلة نقلة',
+                    onTap: () =>
+                        _open(context, const PgnImportScreen()),
                   ),
                   const SizedBox(height: 14),
                   _MenuButton(
                     icon: Icons.travel_explore_rounded,
                     label: 'مبارياتي',
-                    subtitle:
-                        'حمّل مبارياتك من Chess.com أو'
-                        ' Lichess',
-                    onTap: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) =>
-                              const MyGamesScreen(),
-                        ),
-                      );
-                    },
+                    subtitle: 'حمّل مبارياتك من Chess.com أو Lichess',
+                    onTap: () => _open(context, const MyGamesScreen()),
+                  ),
+                  const SizedBox(height: 14),
+                  _MenuButton(
+                    icon: Icons.smart_toy_rounded,
+                    label: 'العب ضد Maia',
+                    subtitle: 'خصم يلعب مثل البشر بتصنيف 1100 / 1500 / 1900',
+                    onTap: () => _open(context, const MaiaPlayScreen()),
+                  ),
+                  const SizedBox(height: 14),
+                  _MenuButton(
+                    icon: Icons.extension_rounded,
+                    label: 'تمارين من مبارياتك',
+                    subtitle: 'وضعيات فاتتك فيها نقلة قوية في مبارياتك',
+                    onTap: () => _open(context, const PuzzlesScreen()),
                   ),
                   const SizedBox(height: 14),
                   _MenuButton(
                     icon: Icons.settings_rounded,
                     label: 'الإعدادات',
-                    subtitle:
-                        'الصوت والمظهر (قريبًا المزيد)',
-                    onTap: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) =>
-                              const _SettingsPlaceholder(),
-                        ),
-                      );
-                    },
+                    subtitle: 'ثيم الرقعة والقطع، مستوى Maia، اسمك',
+                    onTap: () => _open(context, const SettingsScreen()),
                   ),
                 ],
               ),
@@ -180,32 +168,6 @@ class _MenuButton extends StatelessWidget {
               ),
               const Icon(Icons.chevron_left),
             ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// إعدادات مبسّطة (صوت التطبيق). سيُوسَّع لاحقًا (سمة الرقعة،
-/// إحداثيات، سرعة التحليل الافتراضية...).
-class _SettingsPlaceholder extends StatelessWidget {
-  const _SettingsPlaceholder();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('الإعدادات'),
-      ),
-      body: const SafeArea(
-        child: Padding(
-          padding: EdgeInsets.all(20),
-          child: Text(
-            'إعدادات الصوت متاحة من داخل شاشة تحليل'
-            ' الوضعية حاليًا. سيتم نقلها هنا مستقبلًا'
-            ' مع إعدادات إضافية (السمة، الإحداثيات،'
-            ' سرعة التحليل الافتراضية).',
           ),
         ),
       ),

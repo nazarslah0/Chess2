@@ -249,7 +249,6 @@ class AnalysisPanel extends StatelessWidget {
   final bool engineReady;
   final bool analyzing;
 
-  final int depth;
   final int multiPv;
 
   final Map<int, PvLineDisplay> lines;
@@ -257,7 +256,6 @@ class AnalysisPanel extends StatelessWidget {
   final VoidCallback onAnalyze;
   final VoidCallback onStop;
 
-  final void Function(int value) onDepthChanged;
   final void Function(int value) onMultiPvChanged;
   final void Function(int index) onSelectLine;
 
@@ -266,12 +264,10 @@ class AnalysisPanel extends StatelessWidget {
     required this.engineStatus,
     required this.engineReady,
     required this.analyzing,
-    required this.depth,
     required this.multiPv,
     required this.lines,
     required this.onAnalyze,
     required this.onStop,
-    required this.onDepthChanged,
     required this.onMultiPvChanged,
     required this.onSelectLine,
   });
@@ -286,31 +282,17 @@ class AnalysisPanel extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              engineStatus,
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                SizedBox(
-                  width: 92,
-                  child: Text('العمق: $depth'),
+            // لا نعرض نص حالة المحرك إلا عند الخطأ.
+            if (engineStatus.startsWith('🔴')) ...[
+              Text(
+                engineStatus,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.red,
                 ),
-                Expanded(
-                  child: Slider(
-                    min: 8,
-                    max: 30,
-                    divisions: 22,
-                    value: depth.clamp(8, 30).toDouble(),
-                    label: '$depth',
-                    onChanged: analyzing
-                        ? null
-                        : (v) => onDepthChanged(v.round()),
-                  ),
-                ),
-              ],
-            ),
+              ),
+              const SizedBox(height: 10),
+            ],
             Row(
               children: [
                 SizedBox(

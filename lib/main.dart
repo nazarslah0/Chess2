@@ -7,8 +7,14 @@ import 'board_widget.dart';
 import 'panels.dart';
 import 'sound_service.dart';
 import 'home_screen.dart';
+import 'app_settings.dart';
+import 'position_insights.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  await AppSettings.instance.load();
+
   runApp(
     const ChessAnalyzerApp(),
   );
@@ -79,9 +85,6 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
   final SoundService soundService =
       SoundService();
 
-  int boardThemeIdx = 0;
-  int pieceThemeIdx = 0;
-
   String engineStatus =
       '🟡 جاري تشغيل Stockfish 19...';
 
@@ -117,6 +120,8 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
     state.addListener(
       _onStateChanged,
     );
+
+    AppSettings.instance.addListener(_onSettingsChanged);
 
     state.onSound = (
       String kind,
@@ -226,6 +231,30 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
     engine.init();
   }
 
+  void _onSettingsChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// تنفيذ نقلة UCI على الرقعة (عند لمس نقلة في الكتاب أو Maia أو
+  /// Tablebase).
+  void _playUci(String uci) {
+    if (state.mode != 'play' || uci.length < 4) {
+      return;
+    }
+
+    setState(() {
+      targets = <String>{};
+    });
+
+    state.tapSetupSelect(null);
+
+    state.tryMove(
+      uci.substring(0, 2),
+      uci.substring(2, 4),
+      promotion: uci.length > 4 ? uci.substring(4, 5) : null,
+    );
+  }
+
   // ==========================================================
   // State changes
   // ==========================================================
@@ -269,6 +298,8 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
     state.removeListener(
       _onStateChanged,
     );
+
+    AppSettings.instance.removeListener(_onSettingsChanged);
 
     engine.dispose();
 
@@ -732,14 +763,10 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
     BuildContext context,
   ) {
     final boardTheme =
-        boardThemes[
-          boardThemeIdx
-        ];
+        AppSettings.instance.boardTheme;
 
     final pieceTheme =
-        pieceThemes[
-          pieceThemeIdx
-        ];
+        AppSettings.instance.pieceTheme;
 
     final top =
         pvLines[1];
@@ -758,104 +785,6 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
 
           child: Column(
             children: [
-              // =================================================
-              // Themes
-              // =================================================
-
-              Row(
-                children: [
-                  Expanded(
-                    child:
-                        DropdownButtonFormField<int>(
-                      decoration:
-                          const InputDecoration(
-                        labelText:
-                            'ثيم الرقعة',
-                      ),
-
-                      initialValue:
-                          boardThemeIdx,
-
-                      items: [
-                        for (
-                          int i = 0;
-                          i <
-                              boardThemes
-                                  .length;
-                          i++
-                        )
-                          DropdownMenuItem<int>(
-                            value: i,
-                            child: Text(
-                              boardThemes[
-                                i
-                              ].name,
-                            ),
-                          ),
-                      ],
-
-                      onChanged: (
-                        int? value,
-                      ) {
-                        setState(() {
-                          boardThemeIdx =
-                              value ?? 0;
-                        });
-                      },
-                    ),
-                  ),
-
-                  const SizedBox(
-                    width: 8,
-                  ),
-
-                  Expanded(
-                    child:
-                        DropdownButtonFormField<int>(
-                      decoration:
-                          const InputDecoration(
-                        labelText:
-                            'ثيم القطع',
-                      ),
-
-                      initialValue:
-                          pieceThemeIdx,
-
-                      items: [
-                        for (
-                          int i = 0;
-                          i <
-                              pieceThemes
-                                  .length;
-                          i++
-                        )
-                          DropdownMenuItem<int>(
-                            value: i,
-                            child: Text(
-                              pieceThemes[
-                                i
-                              ].name,
-                            ),
-                          ),
-                      ],
-
-                      onChanged: (
-                        int? value,
-                      ) {
-                        setState(() {
-                          pieceThemeIdx =
-                              value ?? 0;
-                        });
-                      },
-                    ),
-                  ),
-                ],
-              ),
-
-              const SizedBox(
-                height: 10,
-              ),
-
               // =================================================
               // Board
               // =================================================
@@ -1155,9 +1084,6 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
                 analyzing:
                     engine.analyzing,
 
-                depth:
-                    depth,
-
                 multiPv:
                     multiPv,
 
@@ -1169,14 +1095,6 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
 
                 onStop: () {
                   engine.stop();
-                },
-
-                onDepthChanged: (
-                  int value,
-                ) {
-                  setState(() {
-                    depth = value;
-                  });
                 },
 
                 onMultiPvChanged: (
@@ -1193,6 +1111,25 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
                   // لا نغير وضعية الرقعة
                   // عند اختيار PV.
                 },
+              ),
+
+              const SizedBox(
+                height: 12,
+              ),
+
+              // =================================================
+              // الكتاب + Tablebase + Maia
+              // =================================================
+
+              PositionInsightsPanel(
+                fen: state.currentFen,
+                enabled: state.mode == 'play' && state.legal,
+                engineBestUci: top != null &&
+                        top.bestFrom.isNotEmpty &&
+                        top.bestTo.isNotEmpty
+                    ? '${top.bestFrom}${top.bestTo}'
+                    : null,
+                onPlayMove: _playUci,
               ),
 
               const SizedBox(

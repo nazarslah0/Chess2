@@ -15,6 +15,8 @@ import 'analysis_cache.dart';
 import 'analysis_result.dart';
 import 'lichess_data_service.dart';
 import 'maia_service.dart';
+import 'app_settings.dart';
+import 'puzzle_storage.dart';
 import 'pv_material.dart';
 
 /// شاشة تحليل مباراة واحدة — **مصدر واحد للتحليل** تُستخدم من
@@ -94,6 +96,14 @@ class _GameAnalysisScreenState
   /// فقط للنقلات "الأفضل" وعند توفر ملفات الأوزان).
   List<double?> _maiaProb = <double?>[];
   List<int?> _maiaBucket = <int?>[];
+
+  /// احتمال أفضل نقلة عند Stockfish عند لاعب بذلك التصنيف، وأرجح
+  /// نقلة عند Maia (UCI) — لشرح الأخطاء ولتقييم الأداء.
+  List<double?> _maiaBestProb = <double?>[];
+  List<String?> _maiaTopUci = <String?>[];
+
+  /// عدد التمارين التي أُضيفت من هذه المباراة (للعرض فقط).
+  int _puzzlesAdded = 0;
 
   /// منظور موحّد لنتائج التحليل (انظر analysis_result.dart) —
   /// يُبنى بعد اكتمال التحليل، ويشكّل الأساس الذي يمكن أن
@@ -178,6 +188,8 @@ class _GameAnalysisScreenState
         List<BookMoveInfo?>.filled(_plies.length, null);
     _maiaProb = List<double?>.filled(_plies.length, null);
     _maiaBucket = List<int?>.filled(_plies.length, null);
+    _maiaBestProb = List<double?>.filled(_plies.length, null);
+    _maiaTopUci = List<String?>.filled(_plies.length, null);
 
     _boardState.loadFen(_fens.first);
 
@@ -217,6 +229,12 @@ class _GameAnalysisScreenState
           cached.maiaBucket.length == _plies.length) {
         _maiaProb = List<double?>.from(cached.maiaProb);
         _maiaBucket = List<int?>.from(cached.maiaBucket);
+
+        if (cached.maiaBestProb.length == _plies.length &&
+            cached.maiaTopUci.length == _plies.length) {
+          _maiaBestProb = List<double?>.from(cached.maiaBestProb);
+          _maiaTopUci = List<String?>.from(cached.maiaTopUci);
+        }
       }
       _analysisResults = _buildAnalysisResults();
       _analyzedCount = _fens.length;
@@ -412,12 +430,18 @@ class _GameAnalysisScreenState
   String _plyUci(int i) =>
       '${_plies[i].from}${_plies[i].to}${_plies[i].promotion ?? ''}';
 
-  /// يشغّل Maia على النقلات المصنّفة "أفضل" (وطابقت نقلة Stockfish)،
+  static String _uci4(String? u) =>
+      (u == null || u.length < 4) ? '' : u.substring(0, 4).toLowerCase();
+
+  /// يشغّل Maia على كل نقلات المباراة (عدا الكتاب والنقلات الإجبارية)،
   /// بأوزان أقرب مستوى لتصنيف كل لاعب (من ترويسة PGN: WhiteElo /
-  /// BlackElo، وإلا 1500). إن كان احتمال أن يجدها لاعب بهذا المستوى
-  /// منخفضًا، وكانت متفوقة بوضوح على البديل التالي في وضعية لم تُحسم،
-  /// تصبح "رائعة". أي فشل (لا أوزان، لا محرك) يتخطى Maia بصمت.
-  Future<void> _applyMaiaGreat(
+  /// BlackElo، وإلا 1500). النتائج تُستخدم في:
+  ///  - رفع نقلة "أفضل" إلى "رائعة" إن لم يكن يجدها إلا القليل.
+  ///  - شرح الأخطاء: خطأ شائع عند هذا المستوى أم زلة غير معتادة.
+  ///  - تقييم الأداء مقابل المتوقع لتصنيفك.
+  ///  - اختيار التمارين من الأخطاء التي يفوّتها غالب لاعبي المستوى.
+  /// أي فشل (لا أوزان، لا محرك) يتخطى Maia بصمت.
+  Future<void> _applyMaia(
     int token,
     List<MoveQuality> qualities,
   ) async {
@@ -426,8 +450,8 @@ class _GameAnalysisScreenState
     final byBucket = <int, List<int>>{};
 
     for (var i = 0; i < qualities.length; i++) {
-      if (qualities[i] != MoveQuality.best) continue;
-      if (!_isBestEngineMove[i]) continue;
+      if (qualities[i] == MoveQuality.book) continue;
+      if (_legalMoveCount(_plies[i].fenBefore) <= 1) continue;
 
       final elo = int.tryParse(
         _headers[_plies[i].color == 'w' ? 'WhiteElo' : 'BlackElo'] ??
@@ -465,14 +489,39 @@ class _GameAnalysisScreenState
             ],
           );
 
-          final prob = policy?[_plyUci(i)];
+          if (policy == null) continue;
+
+          final played = _plyUci(i);
+          final prob = policy[played];
+
+          _maiaBucket[i] = entry.key;
+
+          final ranked = MaiaService.ranked(policy);
+
+          if (ranked.isNotEmpty) _maiaTopUci[i] = ranked.first.key;
+
+          final best = _pvUci[i].isNotEmpty ? _pvUci[i].first : null;
+
+          if (best != null && best.length >= 4) {
+            // مفتاح السياسة قد يختلف في الترقية؛ نطابق على أول 4 خانات.
+            double? bp;
+
+            for (final e in policy.entries) {
+              if (_uci4(e.key) == _uci4(best)) {
+                bp = (bp ?? 0) + e.value;
+              }
+            }
+
+            _maiaBestProb[i] = bp;
+          }
 
           if (prob == null) continue;
 
           _maiaProb[i] = prob;
-          _maiaBucket[i] = entry.key;
 
-          if (_isMaiaGreat(i, prob)) {
+          if (qualities[i] == MoveQuality.best &&
+              _isBestEngineMove[i] &&
+              _isMaiaGreat(i, prob)) {
             qualities[i] = MoveQuality.great;
           }
         }
@@ -480,6 +529,230 @@ class _GameAnalysisScreenState
         await session.close();
       }
     }
+  }
+
+  // ------------------------------------------------------------
+  // تمارين من أخطائك
+  // ------------------------------------------------------------
+
+  /// يستخرج من المباراة وضعيات فاتتك فيها نقلة قوية ويحفظها في
+  /// "تمارين من مبارياتك". إن عُرف اسمك (الإعدادات) تؤخذ أخطاؤك أنت
+  /// فقط، وإلا أخطاء الطرفين. الأفضلية للنقلات التي لا يجدها غالب
+  /// لاعبي المستوى (احتمالها عند Maia <= 35%).
+  Future<void> _collectPuzzles(List<MoveQuality> qualities) async {
+    if (_cancelRequested || _analyzedCount < _fens.length) return;
+
+    try {
+      final settings = AppSettings.instance;
+
+      final whiteMe = settings.isMe(_headers['White']) ||
+          settings.isMe(widget.whiteLabel);
+      final blackMe = settings.isMe(_headers['Black']) ||
+          settings.isMe(widget.blackLabel);
+
+      final String? mySide =
+          whiteMe && !blackMe ? 'w' : (blackMe && !whiteMe ? 'b' : null);
+
+      final cands = <MapEntry<int, int>>[];
+
+      for (var i = 0; i < qualities.length; i++) {
+        final q = qualities[i];
+
+        if (q != MoveQuality.miss &&
+            q != MoveQuality.mistake &&
+            q != MoveQuality.blunder) {
+          continue;
+        }
+
+        final p = _plies[i];
+
+        if (mySide != null && p.color != mySide) continue;
+
+        final best = _pvUci[i].isNotEmpty ? _pvUci[i].first : '';
+
+        if (best.length < 4 || _uci4(best) == _uci4(_plyUci(i))) {
+          continue;
+        }
+
+        final bp = _maiaBestProb[i];
+
+        if (bp != null && bp > 0.35) continue;
+
+        final sign = p.color == 'w' ? 1 : -1;
+
+        // لا نختار وضعيات كانت خاسرة أصلًا.
+        if (_cpAt(i) * sign < -300) continue;
+
+        cands.add(MapEntry<int, int>(i, _lossAt(i)));
+      }
+
+      cands.sort((a, b) => b.value.compareTo(a.value));
+
+      final limit = mySide == null ? 4 : 3;
+
+      final label = '$_whiteName vs $_blackName';
+
+      final items = <PuzzleItem>[];
+
+      for (final c in cands.take(limit)) {
+        final i = c.key;
+        final p = _plies[i];
+        final best = _pvUci[i].first;
+
+        items.add(
+          PuzzleItem(
+            id: PuzzleStorage.idFor(p.fenBefore),
+            fen: p.fenBefore,
+            bestUci: best,
+            bestSan: _pvToSan(p.fenBefore, <String>[best]),
+            playedSan: p.san,
+            line: _pvToSan(p.fenBefore, _pvUci[i]),
+            label: label,
+            createdAt: DateTime.now().millisecondsSinceEpoch,
+            maiaBucket: _maiaBucket[i],
+            maiaBestProb: _maiaBestProb[i],
+          ),
+        );
+      }
+
+      _puzzlesAdded = await PuzzleStorage.addAll(items);
+    } catch (_) {}
+  }
+
+  // ------------------------------------------------------------
+  // الأداء مقابل المتوقع (Maia)
+  // ------------------------------------------------------------
+
+  /// لكل لاعب: عدد النقلات التي وجد فيها أفضل نقلة عند Stockfish مقابل
+  /// ما يتوقعه Maia من لاعب بتصنيفه (مجموع احتمالات أفضل نقلة).
+  /// النتيجة: n, actual, expected, variance, bucket — أو null إن لم
+  /// تتوفر بيانات كافية (< 8 نقلات).
+  Map<String, double>? _maiaPerformance(String color) {
+    var n = 0;
+    var actual = 0;
+    var expected = 0.0;
+    var variance = 0.0;
+    int? bucket;
+
+    for (var i = 0; i < _plies.length; i++) {
+      if (_plies[i].color != color) continue;
+
+      final bp = i < _maiaBestProb.length ? _maiaBestProb[i] : null;
+
+      if (bp == null) continue;
+
+      final best = _pvUci[i].isNotEmpty ? _pvUci[i].first : '';
+
+      n++;
+      expected += bp;
+      variance += bp * (1 - bp);
+
+      if (_uci4(best) == _uci4(_plyUci(i))) actual++;
+
+      bucket ??= _maiaBucket[i];
+    }
+
+    if (n < 8 || bucket == null) return null;
+
+    return <String, double>{
+      'n': n.toDouble(),
+      'actual': actual.toDouble(),
+      'expected': expected,
+      'variance': variance,
+      'bucket': bucket.toDouble(),
+    };
+  }
+
+  Widget _buildPerformanceCard() {
+    final w = _maiaPerformance('w');
+    final b = _maiaPerformance('b');
+
+    if (w == null && b == null) return const SizedBox.shrink();
+
+    Widget row(String name, Map<String, double> m) {
+      final actual = m['actual']!;
+      final expected = m['expected']!;
+      final variance = m['variance']!;
+      final bucket = m['bucket']!.toInt();
+
+      final z = variance > 0.5
+          ? (actual - expected) / math.sqrt(variance)
+          : 0.0;
+
+      String verdict;
+      Color color;
+
+      if (z >= 1) {
+        verdict = 'أعلى من مستوى $bucket';
+        color = Colors.green;
+      } else if (z <= -1) {
+        verdict = 'أقل من مستوى $bucket';
+        color = Colors.orange;
+      } else {
+        verdict = 'ضمن المتوقع لمستوى $bucket';
+        color = Colors.white70;
+      }
+
+      return Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              name,
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              'وجد ${actual.toInt()} من ${m['n']!.toInt()} أفضل نقلة؛ '
+              'المتوقع ${expected.toStringAsFixed(1)}',
+              style: const TextStyle(fontSize: 13),
+            ),
+            Text(
+              verdict,
+              style: TextStyle(
+                color: color,
+                fontWeight: FontWeight.bold,
+                fontSize: 13,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.grey.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'الأداء مقابل المتوقع (Maia)',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          if (w != null) row(_whiteName, w),
+          if (b != null) row(_blackName, b),
+          const SizedBox(height: 8),
+          Text(
+            'يقارن عدد أفضل نقلات Stockfish التي وجدتها بما يجده لاعب '
+            'بنفس التصنيف عادةً.',
+            style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+          ),
+          if (_puzzlesAdded > 0) ...[
+            const SizedBox(height: 6),
+            Text(
+              'أُضيف $_puzzlesAdded تمرين من هذه المباراة إلى «تمارين '
+              'من مبارياتك».',
+              style: const TextStyle(fontSize: 12),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
   bool _isMaiaGreat(int i, double prob) {
@@ -513,13 +786,38 @@ class _GameAnalysisScreenState
 
     if (prob == null || bucket == null) return null;
 
-    final pct = prob * 100;
+    String pct(double p) {
+      final v = p * 100;
 
-    final shown =
-        pct < 1 ? 'أقل من 1' : pct.toStringAsFixed(0);
+      return v < 1 ? 'أقل من 1' : v.toStringAsFixed(0);
+    }
 
-    return 'Maia $bucket: يجد هذه النقلة $shown% من اللاعبين '
-        'بهذا التصنيف';
+    final q = k < _qualities.length ? _qualities[k] : null;
+
+    final bad = q == MoveQuality.inaccuracy ||
+        q == MoveQuality.mistake ||
+        q == MoveQuality.blunder ||
+        q == MoveQuality.miss;
+
+    if (!bad) {
+      return 'Maia $bucket: يجد هذه النقلة ${pct(prob)}% من اللاعبين '
+          'بهذا التصنيف';
+    }
+
+    String? kind;
+
+    if (prob >= 0.25 || _maiaTopUci[k] == _plyUci(k)) {
+      kind = 'خطأ شائع عند هذا المستوى';
+    } else if (prob < 0.05) {
+      kind = 'زلة غير معتادة، غالبًا تسرّع أو غفلة';
+    }
+
+    final bestProb = _maiaBestProb[k];
+
+    return 'Maia $bucket: '
+        '${kind != null ? '$kind — ' : ''}'
+        'يلعبها ${pct(prob)}% من لاعبي هذا المستوى'
+        '${bestProb != null && bestProb < 0.3 ? '، وأفضل نقلة لا يجدها إلا ${pct(bestProb)}%' : ''}';
   }
 
   String? _tbNoteAt(int k) {
@@ -764,8 +1062,10 @@ class _GameAnalysisScreenState
       qualities.add(quality);
     }
 
-    // Maia: نقلة "أفضل" لن يجدها لاعب بهذا التصنيف تُرفع إلى "رائعة".
-    await _applyMaiaGreat(token, qualities);
+    // Maia: رفع "رائعة"، شرح الأخطاء، تقييم الأداء، واستخراج التمارين.
+    await _applyMaia(token, qualities);
+
+    await _collectPuzzles(qualities);
 
     if (!mounted || token != _requestToken) {
       return;
@@ -805,6 +1105,8 @@ class _GameAnalysisScreenState
           bookInfo: List<BookMoveInfo?>.from(_bookInfo),
           maiaProb: List<double?>.from(_maiaProb),
           maiaBucket: List<int?>.from(_maiaBucket),
+          maiaBestProb: List<double?>.from(_maiaBestProb),
+          maiaTopUci: List<String?>.from(_maiaTopUci),
         ),
       );
     }
@@ -2361,8 +2663,8 @@ class _GameAnalysisScreenState
       },
       child: BoardWidget(
         state: _boardState,
-        boardTheme: chessComBoardTheme,
-        pieceTheme: chessComPieceTheme,
+        boardTheme: AppSettings.instance.boardTheme,
+        pieceTheme: AppSettings.instance.pieceTheme,
         onTap: (_) {},
         arrows: _showArrows
             ? _arrowsForCurrent()
@@ -2806,6 +3108,10 @@ class _GameAnalysisScreenState
       children: [
         _buildAccuracySummary(),
         const SizedBox(height: 12),
+        _buildPerformanceCard(),
+        if (_maiaPerformance('w') != null ||
+            _maiaPerformance('b') != null)
+          const SizedBox(height: 12),
         _buildPhaseSummary(),
       ],
     );

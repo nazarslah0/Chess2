@@ -126,6 +126,105 @@ class TablebaseService {
     return pieces >= 2 && pieces <= 7;
   }
 
+  final Map<String, TablebaseDetail?> _detailCache =
+      <String, TablebaseDetail?>{};
+
+  static int? _categoryResult(String? category) {
+    switch (category) {
+      case 'win':
+        return 1;
+      case 'loss':
+        return -1;
+      case 'draw':
+      case 'cursed-win':
+      case 'blessed-loss':
+        return 0;
+      default:
+        return null;
+    }
+  }
+
+  /// تفاصيل الوضعية: النتيجة والنقلات مرتبة (للعرض في شاشة تحليل
+  /// الوضعية). null إن لم تكن مؤهلة أو تعذّر الجلب.
+  Future<TablebaseDetail?> probeDetailed(String fen) async {
+    final clean = fen.trim();
+
+    if (!isEligible(clean)) return null;
+
+    final key = clean.split(RegExp(r'\s+')).take(4).join(' ');
+
+    if (_detailCache.containsKey(key)) return _detailCache[key];
+
+    if (_backoff.blocked) return null;
+
+    final res = await _httpGet('$_base?fen=${_fenParam(clean)}');
+
+    if (res == null) {
+      _backoff.failure();
+      return null;
+    }
+
+    if (res.status == 429) {
+      _backoff.rateLimited();
+      return null;
+    }
+
+    if (res.status != 200) {
+      _detailCache[key] = null;
+      return null;
+    }
+
+    _backoff.success();
+
+    try {
+      final json = jsonDecode(res.body);
+
+      if (json is! Map) return null;
+
+      int? asInt(dynamic v) => v is num ? v.toInt() : null;
+
+      final moves = <TablebaseMove>[];
+
+      final raw = json['moves'];
+
+      if (raw is List) {
+        for (final m in raw) {
+          if (m is! Map) continue;
+
+          // category النقلة من منظور الخصم بعد تنفيذها.
+          final opp = _categoryResult(m['category']?.toString());
+
+          moves.add(
+            TablebaseMove(
+              uci: m['uci']?.toString() ?? '',
+              san: m['san']?.toString() ?? '',
+              result: opp == null ? null : -opp,
+              dtz: asInt(m['dtz']),
+              dtm: asInt(m['dtm']),
+            ),
+          );
+        }
+      }
+
+      final detail = TablebaseDetail(
+        result: _categoryResult(json['category']?.toString()),
+        checkmate: json['checkmate'] == true,
+        stalemate: json['stalemate'] == true,
+        dtz: asInt(json['dtz']),
+        dtm: asInt(json['dtm']),
+        moves: moves,
+      );
+
+      if (_detailCache.length > 500) _detailCache.clear();
+
+      _detailCache[key] = detail;
+
+      return detail;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// النتيجة المضمونة من منظور الأبيض: 1 = فوز الأبيض، 0 = تعادل،
   /// -1 = فوز الأسود، null = غير معروفة (غير مؤهلة / فشل الاتصال /
   /// نتيجة غير حاسمة بسبب قاعدة الـ50 نقلة).
@@ -210,22 +309,75 @@ class TablebaseService {
   }
 }
 
+/// نقلة من Tablebase، والنتيجة من منظور اللاعب الذي ينفّذها:
+/// 1 = تحافظ على الفوز، 0 = تعادل، -1 = خسارة.
+class TablebaseMove {
+  final String uci;
+  final String san;
+  final int? result;
+  final int? dtz;
+  final int? dtm;
+
+  const TablebaseMove({
+    required this.uci,
+    required this.san,
+    required this.result,
+    this.dtz,
+    this.dtm,
+  });
+}
+
+/// تفاصيل وضعية من Tablebase. [result] من منظور اللاعب الذي عليه
+/// الدور (1 فوز، 0 تعادل، -1 خسارة، null غير معروفة).
+class TablebaseDetail {
+  final int? result;
+  final bool checkmate;
+  final bool stalemate;
+  final int? dtz;
+  final int? dtm;
+
+  /// مرتبة من الأفضل إلى الأسوأ (كما يعيدها Lichess).
+  final List<TablebaseMove> moves;
+
+  const TablebaseDetail({
+    required this.result,
+    required this.checkmate,
+    required this.stalemate,
+    required this.dtz,
+    required this.dtm,
+    required this.moves,
+  });
+}
+
 // ================================================================
 // Opening Explorer
 // ================================================================
 
-class _ExplorerMove {
+/// إحصائيات نقلة واحدة من Opening Explorer.
+class ExplorerMoveStat {
+  final String uci;
   final String san;
-  final int total;
+  final int white;
+  final int draws;
+  final int black;
 
-  const _ExplorerMove(this.san, this.total);
+  const ExplorerMoveStat({
+    required this.uci,
+    required this.san,
+    required this.white,
+    required this.draws,
+    required this.black,
+  });
+
+  int get total => white + draws + black;
 }
 
-class _ExplorerPosition {
+/// إحصائيات وضعية من Opening Explorer (قاعدة واحدة).
+class ExplorerPositionData {
   final int total;
-  final List<_ExplorerMove> moves;
+  final List<ExplorerMoveStat> moves;
 
-  const _ExplorerPosition(this.total, this.moves);
+  const ExplorerPositionData(this.total, this.moves);
 
   int gamesFor(String normalizedSan) {
     for (final m in moves) {
@@ -287,8 +439,8 @@ class OpeningExplorerService {
   /// أقل عدد مباريات أساتذة لاعتبار النقلة "كتاب".
   static const int minMasterGames = 10;
 
-  final Map<String, _ExplorerPosition?> _cache =
-      <String, _ExplorerPosition?>{};
+  final Map<String, ExplorerPositionData?> _cache =
+      <String, ExplorerPositionData?>{};
 
   final _Backoff _backoff = _Backoff();
 
@@ -299,7 +451,7 @@ class OpeningExplorerService {
   static String normalizeSan(String san) =>
       san.replaceAll(RegExp(r'[+#!?]'), '').trim();
 
-  Future<_ExplorerPosition?> _fetch(
+  Future<ExplorerPositionData?> _fetch(
     String db,
     String fen,
   ) async {
@@ -351,7 +503,7 @@ class OpeningExplorerService {
 
       int n(dynamic v) => v is num ? v.toInt() : 0;
 
-      final moves = <_ExplorerMove>[];
+      final moves = <ExplorerMoveStat>[];
 
       final rawMoves = json['moves'];
 
@@ -360,15 +512,18 @@ class OpeningExplorerService {
           if (m is! Map) continue;
 
           moves.add(
-            _ExplorerMove(
-              m['san']?.toString() ?? '',
-              n(m['white']) + n(m['draws']) + n(m['black']),
+            ExplorerMoveStat(
+              uci: m['uci']?.toString() ?? '',
+              san: m['san']?.toString() ?? '',
+              white: n(m['white']),
+              draws: n(m['draws']),
+              black: n(m['black']),
             ),
           );
         }
       }
 
-      final position = _ExplorerPosition(
+      final position = ExplorerPositionData(
         n(json['white']) + n(json['draws']) + n(json['black']),
         moves,
       );
@@ -383,6 +538,14 @@ class OpeningExplorerService {
     }
   }
 
+  /// إحصائيات الوضعية من مباريات الأساتذة (null = تعذّر الجلب).
+  Future<ExplorerPositionData?> mastersStats(String fen) =>
+      _fetch('masters', fen);
+
+  /// إحصائيات الوضعية من مباريات لاعبي Lichess (null = تعذّر الجلب).
+  Future<ExplorerPositionData?> lichessStats(String fen) =>
+      _fetch('lichess', fen);
+
   /// يبحث عن النقلة [san] المُلعَبة من الوضعية [fenBefore] في قاعدتي
   /// الأساتذة وLichess. يعيد null إذا تعذّر جلب قاعدة الأساتذة (لا
   /// إنترنت / رفض صلاحية / 429) — وعندها يعود المستدعي للتقدير المحلي.
@@ -390,7 +553,7 @@ class OpeningExplorerService {
     required String fenBefore,
     required String san,
   }) async {
-    final results = await Future.wait<_ExplorerPosition?>([
+    final results = await Future.wait<ExplorerPositionData?>([
       _fetch('masters', fenBefore),
       _fetch('lichess', fenBefore),
     ]);

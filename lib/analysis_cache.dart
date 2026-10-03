@@ -30,6 +30,11 @@ class AnalysisCacheEntry {
   final List<double?> maiaProb;
   final List<int?> maiaBucket;
 
+  /// احتمال أفضل نقلة عند Stockfish عند لاعب بتصنيف Maia، وأرجح
+  /// نقلة عند Maia (UCI) لكل نقلة.
+  final List<double?> maiaBestProb;
+  final List<String?> maiaTopUci;
+
   const AnalysisCacheEntry({
     required this.evalPawns,
     required this.evalLabels,
@@ -43,6 +48,8 @@ class AnalysisCacheEntry {
     this.bookInfo = const <BookMoveInfo?>[],
     this.maiaProb = const <double?>[],
     this.maiaBucket = const <int?>[],
+    this.maiaBestProb = const <double?>[],
+    this.maiaTopUci = const <String?>[],
   });
 }
 

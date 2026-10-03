@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/services.dart';
 import 'package:lc0/lc0.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -45,6 +45,46 @@ class MaiaService {
   static String assetPath(int bucket) =>
       'assets/maia/maia-$bucket.pb.gz';
 
+  /// المستويات التي أوزانها مضمَّنة فعلًا في التطبيق.
+  static Future<List<int>> availableBuckets() async {
+    try {
+      final manifest =
+          await AssetManifest.loadFromAssetBundle(rootBundle);
+
+      final assets = manifest.listAssets().toSet();
+
+      return <int>[
+        for (final b in buckets)
+          if (assets.contains(assetPath(b))) b,
+      ];
+    } catch (_) {
+      return const <int>[];
+    }
+  }
+
+  /// أقرب مستوى متاح إلى [wanted] (أو null إن لم يتوفر أي وزن).
+  static int? nearestAvailable(int wanted, List<int> available) {
+    if (available.isEmpty) return null;
+
+    var best = available.first;
+
+    for (final b in available) {
+      if ((b - wanted).abs() < (best - wanted).abs()) best = b;
+    }
+
+    return best;
+  }
+
+  /// ترتيب نقلات السياسة من الأرجح إلى الأقل.
+  static List<MapEntry<String, double>> ranked(
+    Map<String, double> policy,
+  ) {
+    final list = policy.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    return list;
+  }
+
   /// ينسخ ملف الأوزان من الـ assets إلى مجلد التطبيق (lc0 يحتاج مسار
   /// ملف حقيقي). يعيد null إن لم يكن الملف مضمَّنًا.
   static Future<String?> _materialize(int bucket) async {
@@ -83,11 +123,17 @@ class MaiaSession {
 
   MaiaSession._(this._engine);
 
+  /// lc0 يسمح بمحرك حي واحد فقط؛ نمنع فتح جلسة جديدة قبل اكتمال
+  /// إغلاق السابقة (مثلًا عند الانتقال بين شاشتين).
+  static Future<void> _pendingClose = Future<void>.value();
+
   static final RegExp _moveLine = RegExp(
     r'info string (\S+)\s+\(\s*\d+\s*\)\s+N:.*?\(P:\s*([\d.]+)%\)',
   );
 
   static Future<MaiaSession?> open(int bucket) async {
+    await _pendingClose;
+
     final path = await MaiaService._materialize(bucket);
 
     if (path == null) return null;
@@ -181,7 +227,15 @@ class MaiaSession {
     }
   }
 
-  Future<void> close() async {
+  Future<void> close() {
+    final f = _closeInner();
+
+    _pendingClose = f;
+
+    return f;
+  }
+
+  Future<void> _closeInner() async {
     try {
       await _sub?.cancel();
     } catch (_) {}
