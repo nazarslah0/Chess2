@@ -13,6 +13,8 @@ import 'game_review_models.dart';
 import 'uci_utils.dart';
 import 'analysis_cache.dart';
 import 'analysis_result.dart';
+import 'lichess_data_service.dart';
+import 'pv_material.dart';
 
 /// شاشة تحليل مباراة واحدة — **مصدر واحد للتحليل** تُستخدم من
 /// Chess.com ومن Lichess ومن PGN مُلصَق يدويًا على حدٍّ سواء.
@@ -73,6 +75,18 @@ class _GameAnalysisScreenState
   /// ply (منظور اللاعب)، بطول _plies — يُستخدم لاختيار
   /// "أفضل نقلة في المباراة" بمعيار حقيقي.
   List<int?> _moveGapCp = <int?>[];
+
+  /// نتيجة Tablebase المضمونة لكل وضعية (منظور الأبيض: 1 = فوز
+  /// الأبيض، 0 = تعادل، -1 = فوز الأسود، null = غير معروفة). تُملأ
+  /// فقط للوضعيات ذات 7 قطع أو أقل.
+  List<int?> _tbWdlWhite = <int?>[];
+
+  /// إحصائيات الكتاب (Opening Explorer) لكل نقلة، أو null.
+  List<BookMoveInfo?> _bookInfo = <BookMoveInfo?>[];
+
+  /// هل نجح الاتصال بـ Opening Explorer في هذا التحليل؟ إن لم ينجح
+  /// نعود لتقدير "كتاب" المحلي القديم.
+  bool _explorerAvailable = false;
 
   /// منظور موحّد لنتائج التحليل (انظر analysis_result.dart) —
   /// يُبنى بعد اكتمال التحليل، ويشكّل الأساس الذي يمكن أن
@@ -151,6 +165,10 @@ class _GameAnalysisScreenState
         List<bool>.filled(_plies.length, false);
     _moveGapCp =
         List<int?>.filled(_plies.length, null);
+    _tbWdlWhite =
+        List<int?>.filled(_fens.length, null);
+    _bookInfo =
+        List<BookMoveInfo?>.filled(_plies.length, null);
 
     _boardState.loadFen(_fens.first);
 
@@ -177,6 +195,14 @@ class _GameAnalysisScreenState
       _isBestEngineMove =
           List<bool>.from(cached.isBestEngineMove);
       _moveGapCp = List<int?>.from(cached.moveGapCp);
+
+      if (cached.tbWdlWhite.length == _fens.length) {
+        _tbWdlWhite = List<int?>.from(cached.tbWdlWhite);
+      }
+
+      if (cached.bookInfo.length == _plies.length) {
+        _bookInfo = List<BookMoveInfo?>.from(cached.bookInfo);
+      }
       _analysisResults = _buildAnalysisResults();
       _analyzedCount = _fens.length;
       _progress = 1;
@@ -286,6 +312,151 @@ class _GameAnalysisScreenState
     );
   }
 
+  /// التقييم الفعّال بالقرن (منظور الأبيض) للوضعية i، ويُستخدم في
+  /// التصنيف والدقة وخسارة التقييم. إن وُجدت نتيجة Tablebase مضمونة
+  /// فهي تصحّح تقدير Stockfish:
+  ///  - تعادل مضمون  => 0 (بدل أي أفضلية وهمية يراها المحرك).
+  ///  - فوز/خسارة مضمونة => لا ينزل التقييم عن ±400 (احتمال فوز ~81%)،
+  ///    فلا تبدو "فوزًا مضمونًا" وضعية يراها المحرك متكافئة.
+  /// نتائج المات من المحرك تبقى كما هي. القيم المعروضة (شريط التقييم
+  /// والرسم) لا تتغير — هذا التصحيح للحساب فقط.
+  int _cpAt(int i) {
+    final base = cpFromWhitePerspective(
+      _evalPawns[i],
+      _evalLabels[i],
+    );
+
+    final wdl = i < _tbWdlWhite.length ? _tbWdlWhite[i] : null;
+
+    if (wdl == null) return base;
+
+    if (wdl == 0) return 0;
+
+    return wdl > 0 ? math.max(base, 400) : math.min(base, -400);
+  }
+
+  /// يطبّق نتيجة Tablebase المضمونة على تصنيف النقلة:
+  ///  - فوز => تعادل: "فرصة ضائعة". فوز/تعادل => خسارة: "خطأ فادح".
+  ///  - النتيجة لم تتغير (فوز=>فوز، تعادل=>تعادل، خسارة=>خسارة): لا
+  ///    تُصنَّف النقلة خطأ أو خطأً فادحًا مهما بدا تقدير المحرك، بحد
+  ///    أقصى "غير دقيقة".
+  MoveQuality _applyTablebase({
+    required MoveQuality quality,
+    required String color,
+    required int wdlBeforeWhite,
+    required int wdlAfterWhite,
+  }) {
+    final sign = color == 'w' ? 1 : -1;
+
+    final before = wdlBeforeWhite * sign;
+    final after = wdlAfterWhite * sign;
+
+    if (after < before) {
+      if (after == -1) return MoveQuality.blunder;
+
+      // فوز => تعادل.
+      return MoveQuality.miss;
+    }
+
+    if (after == before &&
+        (quality == MoveQuality.mistake ||
+            quality == MoveQuality.blunder ||
+            quality == MoveQuality.miss)) {
+      return MoveQuality.inaccuracy;
+    }
+
+    return quality;
+  }
+
+  /// يملأ _bookInfo بإحصائيات Opening Explorer للنقلات الأولى.
+  /// "الكتاب" سلسلة متصلة من البداية: عند أول نقلة ليست كتابًا نتوقف
+  /// ولا نستعلم عن بقية النقلات (يوفّر الطلبات أيضًا).
+  Future<void> _resolveBookMoves(int token) async {
+    final limit = math.min(_plies.length, 40);
+
+    for (var i = 0; i < limit; i++) {
+      if (!mounted || token != _requestToken || _cancelRequested) {
+        return;
+      }
+
+      final info = await OpeningExplorerService.instance
+          .lookupBookMove(
+        fenBefore: _plies[i].fenBefore,
+        san: _plies[i].san,
+      );
+
+      if (info == null) return;
+
+      _explorerAvailable = true;
+      _bookInfo[i] = info;
+
+      if (!info.isBook) return;
+    }
+  }
+
+  String? _tbNoteAt(int k) {
+    if (k < 0 ||
+        k >= _plies.length ||
+        k + 1 >= _tbWdlWhite.length) {
+      return null;
+    }
+
+    final after = _tbWdlWhite[k + 1];
+
+    if (after == null) return null;
+
+    final sign = _plies[k].color == 'w' ? 1 : -1;
+
+    String name(int v) =>
+        v > 0 ? 'فوز' : (v < 0 ? 'خسارة' : 'تعادل');
+
+    final ma = after * sign;
+    final beforeRaw = _tbWdlWhite[k];
+
+    if (beforeRaw == null) {
+      return 'Tablebase: النتيجة بعد النقلة مضمونة — ${name(ma)}';
+    }
+
+    final mb = beforeRaw * sign;
+
+    if (mb == ma) {
+      return 'Tablebase: النتيجة لم تتغير (${name(mb)} مضمون)';
+    }
+
+    return 'Tablebase: ${name(mb)} ← ${name(ma)} (نتيجة مضمونة)';
+  }
+
+  String? _bookNoteAt(int k) {
+    if (k < 0 || k >= _bookInfo.length) return null;
+
+    final info = _bookInfo[k];
+
+    if (info == null) return null;
+
+    final parts = <String>[];
+
+    if (info.mastersGames > 0) {
+      final pct = info.mastersPercent;
+
+      parts.add(
+        'لُعبت في ${info.mastersGames} مباراة أساتذة'
+        '${pct != null ? ' (${pct.toStringAsFixed(0)}%)' : ''}',
+      );
+    }
+
+    final lp = info.lichessPercent;
+
+    if (lp != null && (info.lichessGames ?? 0) > 0) {
+      parts.add(
+        'يلعبها ${lp.toStringAsFixed(0)}% من لاعبي Lichess',
+      );
+    }
+
+    if (parts.isEmpty) return null;
+
+    return '${info.isBook ? 'كتاب: ' : ''}${parts.join(' · ')}';
+  }
+
   Future<void> _runAnalysis(int token) async {
     if (!_engine.ready) {
       await _engine.init();
@@ -299,6 +470,9 @@ class _GameAnalysisScreenState
       }
     }
 
+    // استعلامات Opening Explorer تعمل بالتوازي مع Stockfish ولا تؤخّره.
+    final bookFuture = _resolveBookMoves(token);
+
     for (var i = 0; i < _fens.length; i++) {
       if (!mounted || token != _requestToken) {
         return;
@@ -308,7 +482,14 @@ class _GameAnalysisScreenState
         break;
       }
 
+      // استعلام Tablebase (للوضعيات ذات 7 قطع أو أقل فقط) يعمل
+      // بالتوازي مع تحليل Stockfish لنفس الوضعية.
+      final tbFuture =
+          TablebaseService.instance.probeWhiteWdl(_fens[i]);
+
       final r = await _evaluatePosition(_fens[i]);
+
+      final tbWdl = await tbFuture;
 
       if (!mounted || token != _requestToken) {
         return;
@@ -319,11 +500,18 @@ class _GameAnalysisScreenState
       _bestUci[i] = r.bestUci;
       _pvUci[i] = r.pv;
       _secondBestCpWhite[i] = r.secondBestCpWhite;
+      _tbWdlWhite[i] = tbWdl;
 
       setState(() {
         _analyzedCount = i + 1;
         _progress = (i + 1) / _fens.length;
       });
+    }
+
+    await bookFuture;
+
+    if (!mounted || token != _requestToken) {
+      return;
     }
 
     // نصنّف فقط النقلات التي اكتمل تحليل وضعيتها السابقة
@@ -337,15 +525,9 @@ class _GameAnalysisScreenState
     for (var i = 0; i < classifiableCount; i++) {
       final p = _plies[i];
 
-      final cpBefore = cpFromWhitePerspective(
-        _evalPawns[i],
-        _evalLabels[i],
-      );
+      final cpBefore = _cpAt(i);
 
-      final cpAfter = cpFromWhitePerspective(
-        _evalPawns[i + 1],
-        _evalLabels[i + 1],
-      );
+      final cpAfter = _cpAt(i + 1);
 
       final bestUci = _bestUci[i];
 
@@ -373,6 +555,29 @@ class _GameAnalysisScreenState
 
       _isBestEngineMove[i] = wasBest;
 
+      // Tablebase: نتيجة مضمونة قبل/بعد النقلة تحسم التصنيف بدل
+      // تقدير Stockfish.
+      final tbBefore = _tbWdlWhite[i];
+      final tbAfter = _tbWdlWhite[i + 1];
+
+      if (tbBefore != null && tbAfter != null) {
+        final adjusted = _applyTablebase(
+          quality: quality,
+          color: p.color,
+          wdlBeforeWhite: tbBefore,
+          wdlAfterWhite: tbAfter,
+        );
+
+        if (adjusted != quality) {
+          quality = adjusted;
+
+          if (adjusted == MoveQuality.blunder ||
+              adjusted == MoveQuality.miss) {
+            _isBestEngineMove[i] = false;
+          }
+        }
+      }
+
       final sign = p.color == 'w' ? 1 : -1;
       final cpBeforeMover = cpBefore * sign;
 
@@ -390,9 +595,11 @@ class _GameAnalysisScreenState
 
       if (quality == MoveQuality.best) {
         final upgraded = _tryUpgradeToBrilliant(
+          plyIndex: i,
           ply: p,
           baseQuality: quality,
           cpBeforeMover: cpBeforeMover,
+          cpAfterMover: cpAfter * sign,
           secondBestGapCp: gapCp,
         );
 
@@ -408,10 +615,17 @@ class _GameAnalysisScreenState
         }
       }
 
-      // "كتاب": تقريب لنقلات الافتتاح النظرية (لا توجد قاعدة بيانات
-      // افتتاحات داخل التطبيق): أول 5 نقلات لكل لاعب، وضعية متكافئة،
-      // والنقلة هي الأفضل أو شبه الأفضل — دون تأثير على الدقة.
-      if (i < 10 &&
+      // "كتاب": إن توفّر Opening Explorer فالنقلة كتاب إذا لُعبت في
+      // عدد كافٍ من مباريات الأساتذة (سلسلة متصلة من بداية المباراة).
+      // وإن تعذّر الاتصال نعود للتقدير المحلي القديم (أول 5 نقلات
+      // لكل لاعب، وضعية متكافئة، والنقلة أفضل أو شبه أفضل).
+      if (_explorerAvailable) {
+        final info = _bookInfo[i];
+
+        if (info != null && info.isBook) {
+          quality = MoveQuality.book;
+        }
+      } else if (i < 10 &&
           (quality == MoveQuality.best ||
               quality == MoveQuality.excellent) &&
           cpBefore.abs() <= 60 &&
@@ -456,6 +670,8 @@ class _GameAnalysisScreenState
           isBestEngineMove:
               List<bool>.from(_isBestEngineMove),
           moveGapCp: List<int?>.from(_moveGapCp),
+          tbWdlWhite: List<int?>.from(_tbWdlWhite),
+          bookInfo: List<BookMoveInfo?>.from(_bookInfo),
         ),
       );
     }
@@ -488,10 +704,20 @@ class _GameAnalysisScreenState
     }
   }
 
+  /// هل هذه النقلة تضحية حقيقية؟ الطريقة الدقيقة: نلعب النقلة ثم
+  /// أول 4-6 نقلات من خط Stockfish الرئيسي (PV) بعدها ونقيس المادة.
+  /// إن بقي اللاعب خاسرًا للمادة فعلًا (قطعة أو أكثر مقابل لا شيء)
+  /// مع بقاء التقييم جيدًا فهي تضحية. أما التبادلات التي تعود فيها
+  /// المادة متساوية فلا تُحتسب.
+  ///
+  /// إن لم يتوفر PV كافٍ (أو انتهى في منتصف تبادل) نعود للفحص
+  /// القديم: الخصم يستطيع أخذ القطعة فورًا بربح مادي ظاهري.
   MoveQuality? _tryUpgradeToBrilliant({
+    required int plyIndex,
     required PgnPly ply,
     required MoveQuality baseQuality,
     required int cpBeforeMover,
+    required int cpAfterMover,
     required int? secondBestGapCp,
   }) {
     try {
@@ -513,63 +739,34 @@ class _GameAnalysisScreenState
         return null;
       }
 
-      int capturedValue = 0;
+      final pvAfter = plyIndex + 1 < _pvUci.length
+          ? _pvUci[plyIndex + 1]
+          : const <String>[];
 
-      if (ply.isCapture) {
-        final capturedPiece = boardBefore[ply.to];
+      final sim = pvAfter.length >= 3
+          ? simulatePvMaterial(
+              fenBefore: ply.fenBefore,
+              from: ply.from,
+              to: ply.to,
+              promotion: ply.promotion,
+              moverColor: ply.color,
+              pvAfterUci: pvAfter,
+            )
+          : null;
 
-        if (capturedPiece != null &&
-            capturedPiece.length == 2) {
-          capturedValue =
-              pieceValues[capturedPiece[1]] ?? 0;
-        } else {
-          capturedValue = 1;
-        }
+      bool genuineSacrifice;
+
+      if (sim != null && sim.quiet) {
+        // تضحية حقيقية: خسارة مادة فعلية (>= 2 نقطة) في نهاية الخط،
+        // مع بقاء التقييم جيدًا (ليست وضعية خاسرة).
+        genuineSacrifice =
+            sim.deficit >= 2 && cpAfterMover >= -50;
+      } else {
+        genuineSacrifice =
+            _legacySacrificeCheck(ply, boardBefore, movingType);
       }
 
-      final movingValue =
-          pieceValues[movingType] ?? 0;
-
-      final sacrificedValue =
-          movingValue - capturedValue;
-
-      if (sacrificedValue < 2) {
-        return null;
-      }
-
-      final afterGame = ch.Chess();
-      afterGame.load(ply.fenAfter);
-
-      List<dynamic> opponentMoves = [];
-
-      try {
-        opponentMoves = afterGame.moves(
-          <String, dynamic>{'verbose': true},
-        );
-      } catch (_) {
-        opponentMoves = [];
-      }
-
-      var opponentCanCapture = false;
-
-      for (final m in opponentMoves) {
-        String? to;
-
-        try {
-          to = m is Map
-              ? m['to']?.toString()
-              : (m as dynamic).toAlgebraic as String;
-        } catch (_) {
-          to = null;
-        }
-
-        if (to == ply.to) {
-          opponentCanCapture = true;
-          break;
-        }
-      }
-
-      if (!opponentCanCapture) {
+      if (!genuineSacrifice) {
         return null;
       }
 
@@ -597,6 +794,65 @@ class _GameAnalysisScreenState
     } catch (_) {
       return null;
     }
+  }
+
+  /// الفحص القديم للتضحية (احتياطي عند غياب PV): قيمة القطعة
+  /// المتحركة ناقص ما أخذته >= 2، والخصم يستطيع أخذها في الحال.
+  bool _legacySacrificeCheck(
+    PgnPly ply,
+    Map<String, String> boardBefore,
+    String movingType,
+  ) {
+    int capturedValue = 0;
+
+    if (ply.isCapture) {
+      final capturedPiece = boardBefore[ply.to];
+
+      if (capturedPiece != null &&
+          capturedPiece.length == 2) {
+        capturedValue =
+            pieceValues[capturedPiece[1]] ?? 0;
+      } else {
+        capturedValue = 1;
+      }
+    }
+
+    final movingValue = pieceValues[movingType] ?? 0;
+
+    if (movingValue - capturedValue < 2) {
+      return false;
+    }
+
+    final afterGame = ch.Chess();
+    afterGame.load(ply.fenAfter);
+
+    List<dynamic> opponentMoves = [];
+
+    try {
+      opponentMoves = afterGame.moves(
+        <String, dynamic>{'verbose': true},
+      );
+    } catch (_) {
+      opponentMoves = [];
+    }
+
+    for (final m in opponentMoves) {
+      String? to;
+
+      try {
+        to = m is Map
+            ? m['to']?.toString()
+            : (m as dynamic).toAlgebraic as String;
+      } catch (_) {
+        to = null;
+      }
+
+      if (to == ply.to) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   /// يحوّل قائمة نقلات PV (UCI) بدءًا من FEN معيّن إلى نص SAN
@@ -810,15 +1066,9 @@ class _GameAnalysisScreenState
   /// خسارة التقييم بوحدة القرن من منظور اللاعب الذي لعب
   /// النقلة رقم i (قيمة موجبة = تراجع).
   int _lossAt(int i) {
-    final before = cpFromWhitePerspective(
-      _evalPawns[i],
-      _evalLabels[i],
-    );
+    final before = _cpAt(i);
 
-    final after = cpFromWhitePerspective(
-      _evalPawns[i + 1],
-      _evalLabels[i + 1],
-    );
+    final after = _cpAt(i + 1);
 
     final sign = _plies[i].color == 'w' ? 1 : -1;
 
@@ -826,15 +1076,9 @@ class _GameAnalysisScreenState
   }
 
   double _accuracyAt(int i) {
-    final before = cpFromWhitePerspective(
-      _evalPawns[i],
-      _evalLabels[i],
-    );
+    final before = _cpAt(i);
 
-    final after = cpFromWhitePerspective(
-      _evalPawns[i + 1],
-      _evalLabels[i + 1],
-    );
+    final after = _cpAt(i + 1);
 
     final wpBefore = winPercentWhite(before);
     final wpAfter = winPercentWhite(after);
@@ -906,7 +1150,7 @@ class _GameAnalysisScreenState
     return computeMoveAccuracyData(
       cpWhite: [
         for (var i = 0; i <= m; i++)
-          cpFromWhitePerspective(_evalPawns[i], _evalLabels[i]),
+          _cpAt(i),
       ],
       sides: [
         for (var i = 0; i < m; i++) _plies[i].color,
@@ -1045,16 +1289,10 @@ class _GameAnalysisScreenState
 
       final sign = p.color == 'w' ? 1 : -1;
 
-      final evalBeforeMover = cpFromWhitePerspective(
-            _evalPawns[i],
-            _evalLabels[i],
-          ) *
+      final evalBeforeMover = _cpAt(i) *
           sign;
 
-      final evalAfterMover = cpFromWhitePerspective(
-            _evalPawns[i + 1],
-            _evalLabels[i + 1],
-          ) *
+      final evalAfterMover = _cpAt(i + 1) *
           sign;
 
       final bestUci = i < _bestUci.length ? _bestUci[i] : '';
@@ -2563,6 +2801,26 @@ class _GameAnalysisScreenState
               ),
             ],
           ),
+          if (_bookNoteAt(k) != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              _bookNoteAt(k)!,
+              style: TextStyle(
+                color: moveQualityInfo[MoveQuality.book]!.color,
+                fontSize: 12,
+              ),
+            ),
+          ],
+          if (_tbNoteAt(k) != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              _tbNoteAt(k)!,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 12,
+              ),
+            ),
+          ],
           if (!isBestOrBrilliant &&
               bestSan.isNotEmpty) ...[
             const SizedBox(height: 6),

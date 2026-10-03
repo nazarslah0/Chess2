@@ -1,4 +1,5 @@
 import 'game_review_models.dart';
+import 'lichess_data_service.dart';
 
 /// نتيجة تحليل مباراة كاملة محفوظة — تُستخدم لتفادي إعادة
 /// تشغيل Stockfish إن فُتحت نفس المباراة مرة أخرى بنفس إعدادات
@@ -17,6 +18,13 @@ class AnalysisCacheEntry {
   final List<bool> isBestEngineMove;
   final List<int?> moveGapCp;
 
+  /// نتيجة Tablebase المضمونة لكل وضعية (منظور الأبيض: 1/0/-1، أو
+  /// null إن لم تتوفر). فارغة إن لم يُجرَ أي استعلام.
+  final List<int?> tbWdlWhite;
+
+  /// معلومات الكتاب (Opening Explorer) لكل نقلة، أو null.
+  final List<BookMoveInfo?> bookInfo;
+
   const AnalysisCacheEntry({
     required this.evalPawns,
     required this.evalLabels,
@@ -26,6 +34,8 @@ class AnalysisCacheEntry {
     required this.qualities,
     required this.isBestEngineMove,
     required this.moveGapCp,
+    this.tbWdlWhite = const <int?>[],
+    this.bookInfo = const <BookMoveInfo?>[],
   });
 }
 
