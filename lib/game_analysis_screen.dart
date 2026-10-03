@@ -2076,7 +2076,7 @@ class _GameAnalysisScreenState
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
-                  acc == null ? '—' : '${acc.toStringAsFixed(1)}',
+                  acc == null ? '—' : acc.toStringAsFixed(1),
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 20,
