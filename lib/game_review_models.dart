@@ -246,6 +246,39 @@ MoveQuality classifyMove({
   return MoveQuality.blunder;
 }
 
+/// يطبّق نتيجة Tablebase المضمونة (من منظور الأبيض: 1 / 0 / -1)
+/// على تصنيف النقلة:
+///  - فوز ← تعادل: "فرصة ضائعة" (miss).
+///  - فوز/تعادل ← خسارة: "خطأ فادح" (blunder).
+///  - النتيجة لم تتغير: لا تُصنَّف النقلة miss/mistake/blunder مهما
+///    بدا تقدير المحرك، بحد أقصى "غير دقيقة".
+MoveQuality applyTablebaseClassification({
+  required MoveQuality quality,
+  required String color,
+  required int wdlBeforeWhite,
+  required int wdlAfterWhite,
+}) {
+  final sign = color == 'w' ? 1 : -1;
+
+  final before = wdlBeforeWhite * sign;
+  final after = wdlAfterWhite * sign;
+
+  if (after < before) {
+    if (after == -1) return MoveQuality.blunder;
+
+    return MoveQuality.miss;
+  }
+
+  if (after == before &&
+      (quality == MoveQuality.mistake ||
+          quality == MoveQuality.blunder ||
+          quality == MoveQuality.miss)) {
+    return MoveQuality.inaccuracy;
+  }
+
+  return quality;
+}
+
 // ================================================================
 // تقدير نسبة الدقة (Accuracy) بأسلوب قريب مما تعرضه chess.com،
 // عبر تحويل التقييم إلى "احتمال فوز" ثم قياس الفارق بعد كل نقلة.

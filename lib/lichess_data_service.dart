@@ -126,6 +126,21 @@ class TablebaseService {
     return pieces >= 2 && pieces <= 7;
   }
 
+  /// يحوّل category من Lichess (من منظور اللاعب صاحب الدور) إلى
+  /// نتيجة من منظور الأبيض: 1 فوز الأبيض، 0 تعادل، -1 فوز الأسود،
+  /// أو null إن كانت غير حاسمة (unknown / maybe-* / syzygy-*).
+  /// "فوز مشروط بقاعدة الـ50 نقلة" و"خسارة مشروطة" = تعادل.
+  static int? whiteWdlFromCategory(String? category, String fen) {
+    final sideToMove = _categoryResult(category);
+
+    if (sideToMove == null) return null;
+
+    final parts = fen.trim().split(RegExp(r'\s+'));
+    final white = parts.length > 1 ? parts[1] == 'w' : true;
+
+    return white ? sideToMove : -sideToMove;
+  }
+
   final Map<String, TablebaseDetail?> _detailCache =
       <String, TablebaseDetail?>{};
 
@@ -269,33 +284,10 @@ class TablebaseService {
       final json = jsonDecode(res.body);
 
       if (json is Map) {
-        final category = json['category']?.toString();
-
-        // category من منظور اللاعب الذي عليه الدور.
-        int? sideToMove;
-
-        switch (category) {
-          case 'win':
-            sideToMove = 1;
-            break;
-          case 'loss':
-            sideToMove = -1;
-            break;
-          case 'draw':
-          case 'cursed-win':
-          case 'blessed-loss':
-            sideToMove = 0;
-            break;
-          default:
-            sideToMove = null; // unknown / maybe-* / syzygy-*
-        }
-
-        if (sideToMove != null) {
-          final parts = clean.split(RegExp(r'\s+'));
-          final white = parts.length > 1 ? parts[1] == 'w' : true;
-
-          result = white ? sideToMove : -sideToMove;
-        }
+        result = whiteWdlFromCategory(
+          json['category']?.toString(),
+          clean,
+        );
       }
     } catch (_) {
       result = null;
@@ -411,6 +403,26 @@ class BookMoveInfo {
     this.lichessGames,
     this.lichessPositionGames,
   });
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'isBook': isBook,
+        'mg': mastersGames,
+        'mp': mastersPositionGames,
+        'lg': lichessGames,
+        'lp': lichessPositionGames,
+      };
+
+  static BookMoveInfo? fromJson(dynamic j) {
+    if (j is! Map) return null;
+
+    return BookMoveInfo(
+      isBook: j['isBook'] == true,
+      mastersGames: (j['mg'] as num?)?.toInt() ?? 0,
+      mastersPositionGames: (j['mp'] as num?)?.toInt() ?? 0,
+      lichessGames: (j['lg'] as num?)?.toInt(),
+      lichessPositionGames: (j['lp'] as num?)?.toInt(),
+    );
+  }
 
   /// نسبة الأساتذة الذين لعبوا هذه النقلة في هذه الوضعية (0-100).
   double? get mastersPercent => mastersPositionGames > 0

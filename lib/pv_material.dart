@@ -1,4 +1,5 @@
 import 'package:chess/chess.dart' as ch;
+import 'uci_utils.dart';
 
 // ================================================================
 // محاكاة المادة على خط Stockfish الرئيسي (PV)
@@ -116,16 +117,16 @@ PvMaterialResult? simulatePvMaterial({
       // بعد الحد الأساسي نكمل فقط إذا كان التبادل لا يزال مفتوحًا.
       if (played >= basePlies && !lastWasCapture) break;
 
-      final uci = pvAfterUci[idx];
+      final pvMove = parseUci(pvAfterUci[idx]);
 
-      if (uci.length < 4) break;
+      if (pvMove == null) break;
 
       countBefore = _pieceCount(game.fen);
 
       final ok = applyMove(
-        uci.substring(0, 2),
-        uci.substring(2, 4),
-        uci.length > 4 ? uci.substring(4) : null,
+        pvMove.from,
+        pvMove.to,
+        pvMove.promotion,
       );
 
       if (!ok) break;

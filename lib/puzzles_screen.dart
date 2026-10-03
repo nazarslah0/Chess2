@@ -8,6 +8,7 @@ import 'board_widget.dart';
 import 'models.dart';
 import 'puzzle_storage.dart';
 import 'sound_service.dart';
+import 'uci_utils.dart';
 
 /// تمارين من مبارياتك: وضعيات فاتتك فيها نقلة قوية (يفوّتها غالبًا
 /// لاعبو مستواك بحسب Maia). تُستخرج تلقائيًا عند تحليل أي مباراة.
@@ -111,14 +112,8 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
 
   Future<String?> _askPromotion() async => 'q';
 
-  bool _isBest(PuzzleItem p, String uci) {
-    final best = p.bestUci.toLowerCase();
-    final got = uci.toLowerCase();
-
-    if (best.length >= 5 && got.length >= 5) return best == got;
-
-    return best.substring(0, 4) == got.substring(0, 4);
-  }
+  bool _isBest(PuzzleItem p, String uci) =>
+      isSameUciMove(p.bestUci, uci);
 
   Future<void> _onTap(String square) async {
     final p = _current;
@@ -139,7 +134,7 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
 
     final uci = _input.lastUci ?? '';
 
-    if (uci.length >= 4 && _isBest(p, uci)) {
+    if (_isBest(p, uci)) {
       setState(() {
         _solved = true;
         _feedback = 'صحيح! هذه أفضل نقلة ✅';
@@ -286,8 +281,8 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
                 onTap: _onTap,
                 targets: _input.targets,
                 arrowFrom:
-                    showSolution ? p.bestUci.substring(0, 2) : null,
-                arrowTo: showSolution ? p.bestUci.substring(2, 4) : null,
+                    showSolution ? parseUci(p.bestUci)?.from : null,
+                arrowTo: showSolution ? parseUci(p.bestUci)?.to : null,
               ),
             ),
           ),

@@ -83,6 +83,10 @@ class UciMove {
   String toString() => uci;
 }
 
+/// تحويل نص UCI إلى [UciMove] (أو null إن كان غير صالح).
+/// هذه هي نقطة الدخول الوحيدة لتحليل نصوص UCI في المشروع.
+UciMove? parseUci(String? uci) => UciMove.parse(uci);
+
 /// دالة مختصرة: هل نص UCI الأول يطابق (from/to/promotion)
 /// نص UCI الثاني تمامًا؟
 bool isSameUciMove(String? a, String? b) {
@@ -92,4 +96,18 @@ bool isSameUciMove(String? a, String? b) {
   if (pa == null || pb == null) return false;
 
   return pa.sameMove(pb);
+}
+
+/// أول نقلة صالحة في قائمة PV (UCI)، أو null.
+UciMove? firstValidUci(Iterable<String> pv) {
+  for (final u in pv) {
+    final m = UciMove.parse(u);
+
+    if (m != null) return m;
+
+    // أول عنصر غير صالح يقطع الخط: لا نتجاوزه إلى ما بعده.
+    return null;
+  }
+
+  return null;
 }

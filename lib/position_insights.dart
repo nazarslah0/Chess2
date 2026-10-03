@@ -7,6 +7,7 @@ import 'app_settings.dart';
 import 'lichess_data_service.dart';
 import 'maia_service.dart';
 import 'models.dart';
+import 'uci_utils.dart';
 
 /// مصادر إضافية لشاشة تحليل الوضعية، تُحدَّث تلقائيًا عند تغيّر
 /// الوضعية: نقلات الكتاب (Opening Explorer)، نتيجة Tablebase المضمونة
@@ -224,7 +225,8 @@ class _PositionInsightsPanelState extends State<PositionInsightsPanel> {
 
     final rows = <_MaiaRow>[
       for (final e in MaiaService.ranked(policy).take(6))
-        if (e.key.length >= 4) _MaiaRow(e.key, _san(fen, e.key), e.value),
+        if (parseUci(e.key) != null)
+          _MaiaRow(e.key, _san(fen, e.key), e.value),
     ];
 
     setState(() {
@@ -240,11 +242,15 @@ class _PositionInsightsPanelState extends State<PositionInsightsPanel> {
 
       if (c.load(fen) == false) return uci;
 
+      final move = parseUci(uci);
+
+      if (move == null) return uci;
+
       final m = GameState.findLegalMove(
         c,
-        uci.substring(0, 2),
-        uci.substring(2, 4),
-        uci.length > 4 ? uci.substring(4, 5) : null,
+        move.from,
+        move.to,
+        move.promotion,
       );
 
       return (m?['san'] ?? uci).toString();
@@ -254,12 +260,7 @@ class _PositionInsightsPanelState extends State<PositionInsightsPanel> {
   }
 
   bool _isEngineBest(String uci) {
-    final b = widget.engineBestUci;
-
-    if (b == null || b.length < 4 || uci.length < 4) return false;
-
-    return b.substring(0, 4).toLowerCase() ==
-        uci.substring(0, 4).toLowerCase();
+    return isSameUciMove(widget.engineBestUci, uci);
   }
 
   // ------------------------------------------------------------
@@ -384,7 +385,9 @@ class _PositionInsightsPanelState extends State<PositionInsightsPanel> {
     final t = m.total == 0 ? 1 : m.total;
 
     return InkWell(
-      onTap: m.uci.length >= 4 ? () => widget.onPlayMove(m.uci) : null,
+      onTap: parseUci(m.uci) != null
+          ? () => widget.onPlayMove(m.uci)
+          : null,
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: Row(
@@ -549,7 +552,9 @@ class _PositionInsightsPanelState extends State<PositionInsightsPanel> {
         : (m.dtz != null ? 'DTZ ${m.dtz!.abs()}' : '');
 
     return InkWell(
-      onTap: m.uci.length >= 4 ? () => widget.onPlayMove(m.uci) : null,
+      onTap: parseUci(m.uci) != null
+          ? () => widget.onPlayMove(m.uci)
+          : null,
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: Row(

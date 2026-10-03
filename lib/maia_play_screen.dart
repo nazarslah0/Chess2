@@ -10,6 +10,7 @@ import 'game_analysis_screen.dart';
 import 'maia_service.dart';
 import 'models.dart';
 import 'sound_service.dart';
+import 'uci_utils.dart';
 
 /// العب ضد Maia: خصم يلعب مثل البشر بتصنيف 1100 أو 1500 أو 1900.
 /// تُختار نقلات Maia عشوائيًا حسب احتمالاتها (وليس أقوى نقلة دائمًا)،
@@ -187,7 +188,7 @@ class _MaiaPlayScreenState extends State<MaiaPlayScreen> {
   /// النقلات شبه المستحيلة (< 1%).
   String? _sample(Map<String, double> policy) {
     final entries = policy.entries
-        .where((e) => e.key.length >= 4 && e.value >= 0.01)
+        .where((e) => parseUci(e.key) != null && e.value >= 0.01)
         .toList();
 
     if (entries.isEmpty) {
@@ -279,13 +280,17 @@ class _MaiaPlayScreenState extends State<MaiaPlayScreen> {
   }
 
   bool _applyUci(String uci) {
+    final move = parseUci(uci);
+
+    if (move == null) return false;
+
     final ok = _state.tryMove(
-      uci.substring(0, 2),
-      uci.substring(2, 4),
-      promotion: uci.length > 4 ? uci.substring(4, 5) : null,
+      move.from,
+      move.to,
+      promotion: move.promotion,
     );
 
-    if (ok) _uciHistory.add(uci);
+    if (ok) _uciHistory.add(move.uci);
 
     return ok;
   }

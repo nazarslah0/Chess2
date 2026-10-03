@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'models.dart';
 import 'game_review_models.dart';
 import 'piece_painter.dart';
+import 'board_geometry.dart';
 
 class BoardArrow {
   final String from;
@@ -482,11 +483,12 @@ class BoardWidget extends StatelessWidget {
     required double size,
     required bool flipped,
   }) {
-    final fileIndex = files.indexOf(badge.square[0]);
-    final rankIndex = int.parse(badge.square[1]) - 1;
+    final grid = squareToGrid(badge.square, flipped: flipped);
 
-    final col = flipped ? 7 - fileIndex : fileIndex;
-    final row = flipped ? rankIndex : 7 - rankIndex;
+    if (grid == null) return const SizedBox.shrink();
+
+    final col = grid.col;
+    final row = grid.row;
 
     final d = cell * 0.44;
 
@@ -590,41 +592,15 @@ class _ArrowPainter extends CustomPainter {
     String square,
     double cell,
   ) {
-    if (square.length != 2) {
+    final g = squareToGrid(square, flipped: flipped);
+
+    if (g == null) {
       return Offset.zero;
     }
-
-    final file =
-        BoardWidget.files.indexOf(
-      square[0],
-    );
-
-    final rank =
-        int.tryParse(
-      square.substring(1),
-    );
-
-    if (file < 0 ||
-        file > 7 ||
-        rank == null ||
-        rank < 1 ||
-        rank > 8) {
-      return Offset.zero;
-    }
-
-    final rankIndex = rank - 1;
-
-    final col = flipped
-        ? 7 - file
-        : file;
-
-    final row = flipped
-        ? rankIndex
-        : 7 - rankIndex;
 
     return Offset(
-      col * cell + cell / 2,
-      row * cell + cell / 2,
+      g.col * cell + cell / 2,
+      g.row * cell + cell / 2,
     );
   }
 

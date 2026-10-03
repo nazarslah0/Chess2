@@ -8,6 +8,7 @@ import 'panels.dart';
 import 'sound_service.dart';
 import 'home_screen.dart';
 import 'app_settings.dart';
+import 'uci_utils.dart';
 import 'position_insights.dart';
 
 Future<void> main() async {
@@ -152,7 +153,8 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
       });
     };
 
-    engine.onInfo = (
+    engine.onInfoFor = (
+      AnalysisRequest request,
       int multipv,
       PvLine raw,
     ) {
@@ -160,12 +162,13 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
         return;
       }
 
-      final analysisFen =
-          _analysisFen;
+      // النتيجة تُطبَّق فقط إذا كان طلبها هو آخر طلب وما زالت
+      // الرقعة على نفس الوضعية.
+      final analysisFen = request.fen;
 
-      if (analysisFen == null ||
-          analysisFen.trim() !=
-              state.currentFen.trim()) {
+      if (_analysisFen == null ||
+          _analysisFen!.trim() != analysisFen.trim() ||
+          analysisFen.trim() != state.currentFen.trim()) {
         return;
       }
 
@@ -189,7 +192,8 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
       });
     };
 
-    engine.onBestMove = (
+    engine.onBestMoveFor = (
+      AnalysisRequest request,
       String uci,
     ) {
       // بعض إصدارات/بناءات Stockfish قد ترسل bestmove
@@ -200,14 +204,15 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
         return;
       }
 
-      final analysisFen = _analysisFen;
-      if (analysisFen == null ||
+      final analysisFen = request.fen;
+      if (_analysisFen == null ||
+          _analysisFen!.trim() != analysisFen.trim() ||
           analysisFen.trim() != state.currentFen.trim()) {
         return;
       }
 
-      final clean = uci.trim().toLowerCase();
-      if (!_isValidUciMove(clean)) {
+      final best = parseUci(uci);
+      if (best == null) {
         return;
       }
 
@@ -220,9 +225,9 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
         pvLines[1] = PvLineDisplay(
           depth: depth,
           evalLabel: '—',
-          moves: <String>[clean],
-          bestFrom: clean.substring(0, 2),
-          bestTo: clean.substring(2, 4),
+          moves: <String>[best.uci],
+          bestFrom: best.from,
+          bestTo: best.to,
         );
       });
     };
@@ -238,7 +243,9 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
   /// تنفيذ نقلة UCI على الرقعة (عند لمس نقلة في الكتاب أو Maia أو
   /// Tablebase).
   void _playUci(String uci) {
-    if (state.mode != 'play' || uci.length < 4) {
+    final move = parseUci(uci);
+
+    if (state.mode != 'play' || move == null) {
       return;
     }
 
@@ -249,9 +256,9 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
     state.tapSetupSelect(null);
 
     state.tryMove(
-      uci.substring(0, 2),
-      uci.substring(2, 4),
-      promotion: uci.length > 4 ? uci.substring(4, 5) : null,
+      move.from,
+      move.to,
+      promotion: move.promotion,
     );
   }
 
@@ -312,25 +319,6 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
     super.dispose();
   }
 
-  bool _isValidUciMove(String uci) {
-    if (uci.length < 4) {
-      return false;
-    }
-
-    bool validSquare(String value) {
-      if (value.length != 2) {
-        return false;
-      }
-      final file = value.codeUnitAt(0);
-      final rank = value.codeUnitAt(1);
-      return file >= 97 && file <= 104 &&
-          rank >= 49 && rank <= 56;
-    }
-
-    return validSquare(uci.substring(0, 2)) &&
-        validSquare(uci.substring(2, 4));
-  }
-
   // ==========================================================
   // Convert UCI PV to SAN
   // ==========================================================
@@ -373,21 +361,18 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
 
     for (final uciRaw
         in raw.uciMoves) {
-      final uci = uciRaw.trim().toLowerCase();
-
       // أهم نقطة: لا نجعل فشل تحويل SAN يمنع ظهور
       // نتيجة Stockfish والسهم. UCI نفسه كافٍ لرسم السهم.
-      if (!_isValidUciMove(uci)) {
+      final move = parseUci(uciRaw);
+
+      if (move == null) {
         break;
       }
 
-      final from = uci.substring(0, 2);
-      final to = uci.substring(2, 4);
-
-      String? promotion;
-      if (uci.length >= 5) {
-        promotion = uci.substring(4, 5);
-      }
+      final uci = move.uci;
+      final from = move.from;
+      final to = move.to;
+      final String? promotion = move.promotion;
 
       // ------------------------------------------------------
       // النقلة الأولى تُستخدم للسهم فورًا.
