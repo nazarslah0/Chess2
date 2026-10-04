@@ -28,6 +28,15 @@ class PuzzleItem {
   final int createdAt;
   final int solvedCount;
 
+  /// بيانات إضافية اختيارية (للتمارين المستخرجة من مباريات المكتبة):
+  /// النوع (blunder / missed_win / missed_tactic / critical / brilliant)،
+  /// الصعوبة (1..3)، رد الخصم المتوقع (UCI)، المباراة والنقلة المصدر.
+  final String? theme;
+  final int? difficulty;
+  final String? expectedResponse;
+  final String? sourceGameId;
+  final int? sourceMoveNumber;
+
   const PuzzleItem({
     required this.id,
     required this.fen,
@@ -40,6 +49,11 @@ class PuzzleItem {
     this.maiaBucket,
     this.maiaBestProb,
     this.solvedCount = 0,
+    this.theme,
+    this.difficulty,
+    this.expectedResponse,
+    this.sourceGameId,
+    this.sourceMoveNumber,
   });
 
   String get turn {
@@ -60,6 +74,11 @@ class PuzzleItem {
         maiaBucket: maiaBucket,
         maiaBestProb: maiaBestProb,
         solvedCount: solvedCount ?? this.solvedCount,
+        theme: theme,
+        difficulty: difficulty,
+        expectedResponse: expectedResponse,
+        sourceGameId: sourceGameId,
+        sourceMoveNumber: sourceMoveNumber,
       );
 
   Map<String, dynamic> toJson() => <String, dynamic>{
@@ -74,6 +93,11 @@ class PuzzleItem {
         'maiaBucket': maiaBucket,
         'maiaBestProb': maiaBestProb,
         'solvedCount': solvedCount,
+        'theme': theme,
+        'difficulty': difficulty,
+        'expectedResponse': expectedResponse,
+        'sourceGameId': sourceGameId,
+        'sourceMoveNumber': sourceMoveNumber,
       };
 
   static PuzzleItem? fromJson(dynamic j) {
@@ -96,6 +120,11 @@ class PuzzleItem {
       maiaBucket: (j['maiaBucket'] as num?)?.toInt(),
       maiaBestProb: (j['maiaBestProb'] as num?)?.toDouble(),
       solvedCount: (j['solvedCount'] as num?)?.toInt() ?? 0,
+      theme: j['theme']?.toString(),
+      difficulty: (j['difficulty'] as num?)?.toInt(),
+      expectedResponse: j['expectedResponse']?.toString(),
+      sourceGameId: j['sourceGameId']?.toString(),
+      sourceMoveNumber: (j['sourceMoveNumber'] as num?)?.toInt(),
     );
   }
 }

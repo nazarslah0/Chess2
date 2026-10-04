@@ -114,6 +114,22 @@ class AnalysisCache {
 
   File _file(Directory d, String key) => File('${d.path}/$key.json.gz');
 
+  /// هل يوجد تحليل محفوظ لهذا المفتاح؟ (فحص رخيص: ذاكرة أو وجود ملف،
+  /// دون فك الضغط).
+  Future<bool> contains(String key) async {
+    if (_memory.containsKey(key)) return true;
+
+    final d = await _directory();
+
+    if (d == null) return false;
+
+    try {
+      return await _file(d, key).exists();
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// يحمّل تحليلًا محفوظًا، أو null إن لم يوجد أو لم يعد صالحًا.
   Future<GameAnalysis?> load(String key) async {
     final mem = _memory[key];

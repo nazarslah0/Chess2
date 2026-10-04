@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import 'game_review_screen.dart';
+import 'chesscom_import_screen.dart';
 import 'lichess_screen.dart';
+import 'my_library_screen.dart';
 
 /// اختيار مصدر المباريات: Chess.com أو Lichess.
 class MyGamesScreen extends StatelessWidget {
@@ -20,6 +22,30 @@ class MyGamesScreen extends StatelessWidget {
             mainAxisAlignment:
                 MainAxisAlignment.center,
             children: [
+              _SourceCard(
+                title: 'مكتبة مبارياتي',
+                subtitle: 'كل مبارياتك المحفوظة مع البحث والتصفية والتحليل',
+                icon: Icons.folder_rounded,
+                color: const Color(0xFFB58863),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const GameLibraryScreen(),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              _SourceCard(
+                title: 'استيراد من Chess.com',
+                subtitle: 'اختر الفترة واستورد مبارياتك أو زامنها',
+                icon: Icons.download_rounded,
+                color: const Color(0xFF7FA650),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const ChessComImportScreen(),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
               _SourceCard(
                 title: 'Chess.com',
                 subtitle:

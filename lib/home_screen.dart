@@ -6,6 +6,9 @@ import 'my_games_screen.dart';
 import 'pgn_import_screen.dart';
 import 'puzzles_screen.dart';
 import 'settings_screen.dart';
+import 'stats_screen.dart';
+import 'chesscom_import_screen.dart';
+import 'my_library_screen.dart';
 
 /// الشاشة الرئيسية الحقيقية للتطبيق (القائمة الأساسية).
 /// الرقعة والتحليل التفصيلي يبقيان في شاشات فرعية منفصلة،
@@ -16,6 +19,44 @@ class HomeScreen extends StatelessWidget {
   void _open(BuildContext context, Widget screen) {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => screen),
+    );
+  }
+
+  /// اختيار مصدر المباراة: PGN / Chess.com / مباراة محفوظة.
+  void _chooseGameSource(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (sheet) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.content_paste_rounded),
+              title: const Text('استيراد PGN'),
+              onTap: () {
+                Navigator.pop(sheet);
+                _open(context, const PgnImportScreen());
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.travel_explore_rounded),
+              title: const Text('Chess.com'),
+              onTap: () {
+                Navigator.pop(sheet);
+                _open(context, const ChessComImportScreen());
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.folder_rounded),
+              title: const Text('مباراة محفوظة'),
+              onTap: () {
+                Navigator.pop(sheet);
+                _open(context, const GameLibraryScreen());
+              },
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -50,6 +91,13 @@ class HomeScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 28),
                   _MenuButton(
+                    icon: Icons.bar_chart_rounded,
+                    label: 'إحصائياتي',
+                    subtitle: 'نتائجك ودقتك وأخطاؤك من مبارياتك المحللة',
+                    onTap: () => _open(context, const StatsScreen()),
+                  ),
+                  const SizedBox(height: 14),
+                  _MenuButton(
                     icon: Icons.grid_view_rounded,
                     label: 'تحليل وضعية',
                     subtitle: 'أنشئ وضعية أو الصق FEN: Stockfish '
@@ -61,15 +109,14 @@ class HomeScreen extends StatelessWidget {
                   _MenuButton(
                     icon: Icons.query_stats_rounded,
                     label: 'تحليل مباراة',
-                    subtitle: 'الصق PGN مباراة كاملة وحلّلها نقلة نقلة',
-                    onTap: () =>
-                        _open(context, const PgnImportScreen()),
+                    subtitle: 'PGN أو Chess.com أو مباراة محفوظة',
+                    onTap: () => _chooseGameSource(context),
                   ),
                   const SizedBox(height: 14),
                   _MenuButton(
                     icon: Icons.travel_explore_rounded,
                     label: 'مبارياتي',
-                    subtitle: 'حمّل مبارياتك من Chess.com أو Lichess',
+                    subtitle: 'مكتبتك: مباريات Chess.com وPGN المحفوظة',
                     onTap: () => _open(context, const MyGamesScreen()),
                   ),
                   const SizedBox(height: 14),

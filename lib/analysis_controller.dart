@@ -9,6 +9,7 @@ import 'analysis_result.dart';
 import 'analysis_rules.dart';
 import 'app_settings.dart';
 import 'engine_service.dart';
+import 'game_library.dart' show libraryGameIdFromPgn;
 import 'game_review_models.dart';
 import 'lichess_data_service.dart';
 import 'maia_service.dart';
@@ -678,12 +679,47 @@ class GameAnalysisController extends ChangeNotifier {
             createdAt: DateTime.now().millisecondsSinceEpoch,
             maiaBucket: _maiaBucket[i],
             maiaBestProb: _maiaBestProb[i],
+            theme: _puzzleTheme(i, qualities[i]),
+            difficulty: _puzzleDifficulty(i),
+            expectedResponse:
+                _pvUci[i].length > 1 ? _pvUci[i][1] : null,
+            sourceGameId: libraryGameIdFromPgn(pgn),
+            sourceMoveNumber: (i ~/ 2) + 1,
           ),
         );
       }
 
       _puzzlesAdded = await PuzzleStorage.addAll(items);
     } catch (_) {}
+  }
+
+  /// نوع التمرين من تصنيف النقلة وحكم Tablebase.
+  String _puzzleTheme(int i, MoveQuality q) {
+    if (q == MoveQuality.blunder) return 'blunder';
+
+    final results = _analysisResults;
+
+    if (i < results.length) {
+      final r = results[i];
+
+      if (r.tablebaseVerdict == 'missedWin' ||
+          r.tablebaseVerdict == 'lostWin') {
+        return 'missed_win';
+      }
+
+      if (r.isCritical) return 'critical';
+    }
+
+    return q == MoveQuality.miss ? 'missed_tactic' : 'critical';
+  }
+
+  /// صعوبة 1..3: كلما قلّ احتمال إيجاد النقلة عند Maia صعب أكثر.
+  int _puzzleDifficulty(int i) {
+    final bp = _maiaBestProb[i];
+
+    if (bp == null) return 2;
+
+    return bp < 0.10 ? 3 : (bp < 0.25 ? 2 : 1);
   }
 
   bool _isMaiaGreat(int i, double prob) {

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'game_analysis_screen.dart';
+import 'game_library.dart';
 import 'pgn_utils.dart';
 
 /// شاشة استيراد/لصق PGN لتحليله عبر GameAnalysisScreen نفسها
@@ -50,6 +51,9 @@ class _PgnImportScreenState
     setState(() {
       _error = null;
     });
+
+    // حفظ في مكتبة مبارياتي (المكرر يُتجاهل تلقائيًا).
+    GameLibraryStorage.instance.add(<LibraryGame>[LibraryGame.fromPgn(pgn)]);
 
     Navigator.of(context).push(
       MaterialPageRoute(
