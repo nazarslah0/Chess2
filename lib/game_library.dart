@@ -17,14 +17,13 @@ const int kLibraryAnalysisDepth = 14;
 const int kLibraryAnalysisMultiPv = 2;
 
 /// وسم قواعد التصنيف. غيّره عند أي تعديل في قواعد التصنيف (مثل
-/// البريلينت) فيتغير مفتاح الكاش وتُحلَّل المباريات المحفوظة من جديد
-/// بدل عرض تصنيفات قديمة.
-const String kAnalysisRulesTag = 'brl2';
+/// البريلينت) فيتغير مفتاح الكاش وتُحلَّل المباريات
+/// المحفوظة من جديد بدل عرض تصنيفات قديمة.
+const String kAnalysisRulesTag = 'cc3';
 
-/// مفتاح إعدادات التحليل الموحَّد (أوزان Maia المتاحة + وسم القواعد).
-/// يجب أن يستخدمه المتحكم والمكتبة والإحصائيات معًا.
-String analysisSettingsKey(Iterable<dynamic> maiaBuckets) =>
-    'maia:${maiaBuckets.join(",")};rules:$kAnalysisRulesTag';
+/// مفتاح إعدادات التحليل الموحَّد. يجب أن يستخدمه المتحكم والمكتبة
+/// والإحصائيات معًا.
+String analysisSettingsKey() => 'rules:$kAnalysisRulesTag';
 
 /// معرّف ثابت للمباراة:
 ///  - Chess.com: `cc_<gameId>` من ترويسة Link / رابط المباراة.
@@ -57,7 +56,7 @@ String? _chessComIdFromLink(String? link) {
 }
 
 /// مفتاح التحليل المحفوظ لمباراة في الكاش الدائم (نفس مفتاح
-/// GameAnalysisController). [settingsKey] مثل `maia:1100,1500`.
+/// GameAnalysisController). [settingsKey] من analysisSettingsKey().
 String libraryAnalysisKey(LibraryGame g, String settingsKey) =>
     AnalysisCache.instance.keyFor(
       pgn: g.pgn,

@@ -74,10 +74,6 @@ class _GameAnalysisScreenState
   List<int?> get _moveGapCp => _c.moveGapCp;
   List<int?> get _tbWdlWhite => _c.tbWdlWhite;
   List<BookMoveInfo?> get _bookInfo => _c.bookInfo;
-  List<double?> get _maiaProb => _c.maiaProb;
-  List<int?> get _maiaBucket => _c.maiaBucket;
-  List<double?> get _maiaBestProb => _c.maiaBestProb;
-  List<String?> get _maiaTopUci => _c.maiaTopUci;
   int get _puzzlesAdded => _c.puzzlesAdded;
   bool get _analyzing => _c.analyzing;
   bool get _cancelled => _c.cancelled;
@@ -229,184 +225,6 @@ class _GameAnalysisScreenState
 
   String get _resultText =>
       widget.resultLabel ?? _headers['Result'] ?? '';
-
-  // ------------------------------------------------------------
-  // الأداء مقابل المتوقع (Maia)
-  // ------------------------------------------------------------
-
-  /// لكل لاعب: عدد النقلات التي وجد فيها أفضل نقلة عند Stockfish مقابل
-  /// ما يتوقعه Maia من لاعب بتصنيفه (مجموع احتمالات أفضل نقلة).
-  /// النتيجة: n, actual, expected, variance, bucket — أو null إن لم
-  /// تتوفر بيانات كافية (< 8 نقلات).
-  Map<String, double>? _maiaPerformance(String color) {
-    var n = 0;
-    var actual = 0;
-    var expected = 0.0;
-    var variance = 0.0;
-    int? bucket;
-
-    for (var i = 0; i < _plies.length; i++) {
-      if (_plies[i].color != color) continue;
-
-      final bp = i < _maiaBestProb.length ? _maiaBestProb[i] : null;
-
-      if (bp == null) continue;
-
-      final best = _pvUci[i].isNotEmpty ? _pvUci[i].first : '';
-
-      n++;
-      expected += bp;
-      variance += bp * (1 - bp);
-
-      if (isSameUciMove(best, _plyUci(i))) actual++;
-
-      bucket ??= _maiaBucket[i];
-    }
-
-    if (n < 8 || bucket == null) return null;
-
-    return <String, double>{
-      'n': n.toDouble(),
-      'actual': actual.toDouble(),
-      'expected': expected,
-      'variance': variance,
-      'bucket': bucket.toDouble(),
-    };
-  }
-
-  Widget _buildPerformanceCard() {
-    final w = _maiaPerformance('w');
-    final b = _maiaPerformance('b');
-
-    if (w == null && b == null) return const SizedBox.shrink();
-
-    Widget row(String name, Map<String, double> m) {
-      final actual = m['actual']!;
-      final expected = m['expected']!;
-      final variance = m['variance']!;
-      final bucket = m['bucket']!.toInt();
-
-      final z = variance > 0.5
-          ? (actual - expected) / math.sqrt(variance)
-          : 0.0;
-
-      String verdict;
-      Color color;
-
-      if (z >= 1) {
-        verdict = 'أعلى من مستوى $bucket';
-        color = Colors.green;
-      } else if (z <= -1) {
-        verdict = 'أقل من مستوى $bucket';
-        color = Colors.orange;
-      } else {
-        verdict = 'ضمن المتوقع لمستوى $bucket';
-        color = Colors.white70;
-      }
-
-      return Padding(
-        padding: const EdgeInsets.only(top: 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              name,
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              'وجد ${actual.toInt()} من ${m['n']!.toInt()} أفضل نقلة؛ '
-              'المتوقع ${expected.toStringAsFixed(1)}',
-              style: const TextStyle(fontSize: 13),
-            ),
-            Text(
-              verdict,
-              style: TextStyle(
-                color: color,
-                fontWeight: FontWeight.bold,
-                fontSize: 13,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.grey.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'الأداء مقابل المتوقع (Maia)',
-            style: TextStyle(fontWeight: FontWeight.bold),
-          ),
-          if (w != null) row(_whiteName, w),
-          if (b != null) row(_blackName, b),
-          const SizedBox(height: 8),
-          Text(
-            'يقارن عدد أفضل نقلات Stockfish التي وجدتها بما يجده لاعب '
-            'بنفس التصنيف عادةً.',
-            style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
-          ),
-          if (_puzzlesAdded > 0) ...[
-            const SizedBox(height: 6),
-            Text(
-              'أُضيف $_puzzlesAdded تمرين من هذه المباراة إلى «تمارين '
-              'من مبارياتك».',
-              style: const TextStyle(fontSize: 12),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  String? _maiaNoteAt(int k) {
-    if (k < 0 || k >= _maiaProb.length) return null;
-
-    final prob = _maiaProb[k];
-    final bucket = _maiaBucket[k];
-
-    if (prob == null || bucket == null) return null;
-
-    String pct(double p) {
-      final v = p * 100;
-
-      return v < 1 ? 'أقل من 1' : v.toStringAsFixed(0);
-    }
-
-    final q = k < _qualities.length ? _qualities[k] : null;
-
-    final bad = q == MoveQuality.inaccuracy ||
-        q == MoveQuality.mistake ||
-        q == MoveQuality.blunder ||
-        q == MoveQuality.miss;
-
-    if (!bad) {
-      return 'Maia $bucket: يجد هذه النقلة ${pct(prob)}% من اللاعبين '
-          'بهذا التصنيف';
-    }
-
-    String? kind;
-
-    if (prob >= 0.25 || _maiaTopUci[k] == _plyUci(k)) {
-      kind = 'خطأ شائع عند هذا المستوى';
-    } else if (prob < 0.05) {
-      kind = 'زلة غير معتادة، غالبًا تسرّع أو غفلة';
-    }
-
-    final bestProb = _maiaBestProb[k];
-
-    return 'Maia $bucket: '
-        '${kind != null ? '$kind — ' : ''}'
-        'يلعبها ${pct(prob)}% من لاعبي هذا المستوى'
-        '${bestProb != null && bestProb < 0.3 ? '، وأفضل نقلة لا يجدها إلا ${pct(bestProb)}%' : ''}';
-  }
 
   String? _tbNoteAt(int k) {
     if (k < 0 ||
@@ -2056,10 +1874,6 @@ class _GameAnalysisScreenState
       children: [
         _buildAccuracySummary(),
         const SizedBox(height: 12),
-        _buildPerformanceCard(),
-        if (_maiaPerformance('w') != null ||
-            _maiaPerformance('b') != null)
-          const SizedBox(height: 12),
         _buildPhaseSummary(),
       ],
     );
@@ -2198,16 +2012,6 @@ class _GameAnalysisScreenState
               ),
             ),
           ],
-          if (_maiaNoteAt(k) != null) ...[
-            const SizedBox(height: 6),
-            Text(
-              _maiaNoteAt(k)!,
-              style: const TextStyle(
-                color: Colors.white70,
-                fontSize: 12,
-              ),
-            ),
-          ],
           if (_tbNoteAt(k) != null) ...[
             const SizedBox(height: 6),
             Text(
@@ -2276,7 +2080,7 @@ class _GameAnalysisScreenState
           ),
           const SizedBox(height: 6),
           Text(
-            'دقة Chess2 — مقياس خاص بالتطبيق، ليس مطابقًا'
+            'دقة ChessCraft — مقياس خاص بالتطبيق، ليس مطابقًا'
             ' لدقة Chess.com',
             style: TextStyle(
               fontSize: 10,
@@ -2304,7 +2108,7 @@ class _GameAnalysisScreenState
         ),
         const SizedBox(height: 2),
         Text(
-          'دقة Chess2 — $label',
+          'دقة ChessCraft — $label',
           style: TextStyle(
             fontSize: 12,
             color: Colors.white60,
@@ -2757,7 +2561,7 @@ class _GameAnalysisScreenState
             ),
           ),
           const Text(
-            'دقة Chess2',
+            'دقة ChessCraft',
             style: TextStyle(
               fontSize: 11,
               color: Colors.grey,

@@ -5,7 +5,6 @@ import 'analysis_cache.dart';
 import 'analysis_result.dart';
 import 'game_library.dart';
 import 'game_review_models.dart';
-import 'maia_service.dart';
 import 'user_stats.dart';
 
 /// إحصائياتي: تُحسب من مبارياتك المحفوظة وتحليلاتها في الكاش.
@@ -74,8 +73,7 @@ class _StatsScreenState extends State<StatsScreen> {
       return;
     }
 
-    final maia = await MaiaService.availableBuckets();
-    final settings = analysisSettingsKey(maia);
+    final settings = analysisSettingsKey();
 
     final games = _byUser[user]!;
     final items = <({LibraryGame game, GameAnalysis? analysis})>[];

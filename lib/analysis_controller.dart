@@ -13,7 +13,6 @@ import 'game_library.dart'
     show analysisSettingsKey, libraryGameIdFromPgn;
 import 'game_review_models.dart';
 import 'lichess_data_service.dart';
-import 'maia_service.dart';
 import 'models.dart';
 import 'pgn_utils.dart';
 import 'puzzle_storage.dart';
@@ -51,7 +50,6 @@ class _Eval {
 ///       → لا → لكل وضعية: EngineService + Tablebase بالتوازي
 ///            → Opening Explorer بالتوازي
 ///            → التصنيف (Tablebase، براق/رائعة، كتاب)
-///            → Maia (رائعة، شرح الأخطاء، الأداء)
 ///            → التمارين
 ///            → GameAnalysis (المصدر الموحَّد) → الكاش الدائم
 ///
@@ -101,10 +99,6 @@ class GameAnalysisController extends ChangeNotifier {
   List<int?> _moveGapCp = <int?>[];
   List<int?> _tbWdlWhite = <int?>[];
   List<BookMoveInfo?> _bookInfo = <BookMoveInfo?>[];
-  List<double?> _maiaProb = <double?>[];
-  List<int?> _maiaBucket = <int?>[];
-  List<double?> _maiaBestProb = <double?>[];
-  List<String?> _maiaTopUci = <String?>[];
 
   bool _explorerAvailable = false;
   int _puzzlesAdded = 0;
@@ -144,10 +138,6 @@ class GameAnalysisController extends ChangeNotifier {
   List<int?> get moveGapCp => _moveGapCp;
   List<int?> get tbWdlWhite => _tbWdlWhite;
   List<BookMoveInfo?> get bookInfo => _bookInfo;
-  List<double?> get maiaProb => _maiaProb;
-  List<int?> get maiaBucket => _maiaBucket;
-  List<double?> get maiaBestProb => _maiaBestProb;
-  List<String?> get maiaTopUci => _maiaTopUci;
 
   bool get explorerAvailable => _explorerAvailable;
   int get puzzlesAdded => _puzzlesAdded;
@@ -204,10 +194,6 @@ class GameAnalysisController extends ChangeNotifier {
     _moveGapCp = List<int?>.filled(_plies.length, null);
     _tbWdlWhite = List<int?>.filled(_fens.length, null);
     _bookInfo = List<BookMoveInfo?>.filled(_plies.length, null);
-    _maiaProb = List<double?>.filled(_plies.length, null);
-    _maiaBucket = List<int?>.filled(_plies.length, null);
-    _maiaBestProb = List<double?>.filled(_plies.length, null);
-    _maiaTopUci = List<String?>.filled(_plies.length, null);
 
     // قبل أول إطار: نعرض شاشة التحليل ولا نومض شاشة فارغة.
     _analyzing = true;
@@ -224,10 +210,8 @@ class GameAnalysisController extends ChangeNotifier {
 
     _notify();
 
-    // إعدادات التحليل المؤثرة على النتيجة (توفر أوزان Maia).
-    final maia = await MaiaService.availableBuckets();
-
-    _settingsKey = analysisSettingsKey(maia);
+    // وسم إعدادات/قواعد التحليل (يُبطل الكاش القديم عند تغيير القواعد).
+    _settingsKey = analysisSettingsKey();
 
     _cacheKey = _cache.keyFor(
       pgn: pgn,
@@ -295,10 +279,6 @@ class GameAnalysisController extends ChangeNotifier {
       _isBestEngineMove[i] = m.isBestMove;
       _moveGapCp[i] = m.bestMoveGapCp;
       _bookInfo[i] = m.bookInfo;
-      _maiaProb[i] = m.maiaProbability;
-      _maiaBucket[i] = m.maiaBucket;
-      _maiaBestProb[i] = m.maiaBestProbability;
-      _maiaTopUci[i] = m.maiaTopUci;
     }
 
     _qualities = qualities;
@@ -502,112 +482,13 @@ class GameAnalysisController extends ChangeNotifier {
   String plyUci(int i) =>
       '${_plies[i].from}${_plies[i].to}${_plies[i].promotion ?? ''}';
 
-  /// يشغّل Maia على كل نقلات المباراة (عدا الكتاب والنقلات الإجبارية)،
-  /// بأوزان أقرب مستوى لتصنيف كل لاعب (من ترويسة PGN: WhiteElo /
-  /// BlackElo، وإلا 1500). النتائج تُستخدم في:
-  ///  - رفع نقلة "أفضل" إلى "رائعة" إن لم يكن يجدها إلا القليل.
-  ///  - شرح الأخطاء: خطأ شائع عند هذا المستوى أم زلة غير معتادة.
-  ///  - تقييم الأداء مقابل المتوقع لتصنيفك.
-  ///  - اختيار التمارين من الأخطاء التي يفوّتها غالب لاعبي المستوى.
-  /// أي فشل (لا أوزان، لا محرك) يتخطى Maia بصمت.
-  Future<void> _applyMaia(
-    int token,
-    List<MoveQuality> qualities,
-  ) async {
-    if (_cancelRequested) return;
-
-    final byBucket = <int, List<int>>{};
-
-    for (var i = 0; i < qualities.length; i++) {
-      if (qualities[i] == MoveQuality.book) continue;
-      if (_legalMoveCount(_plies[i].fenBefore) <= 1) continue;
-
-      final elo = int.tryParse(
-        _headers[_plies[i].color == 'w' ? 'WhiteElo' : 'BlackElo'] ??
-            '',
-      );
-
-      byBucket
-          .putIfAbsent(MaiaService.bucketForElo(elo), () => <int>[])
-          .add(i);
-    }
-
-    if (byBucket.isEmpty) return;
-
-    for (final entry in byBucket.entries) {
-      if (_disposed || token != _requestToken || _cancelRequested) {
-        return;
-      }
-
-      final session = await MaiaSession.open(entry.key);
-
-      if (session == null) continue;
-
-      try {
-        for (final i in entry.value) {
-          if (_disposed ||
-              token != _requestToken ||
-              _cancelRequested) {
-            return;
-          }
-
-          final policy = await session.policy(
-            startFen: _fens.first,
-            movesUci: <String>[
-              for (var k = 0; k < i; k++) plyUci(k),
-            ],
-          );
-
-          if (policy == null) continue;
-
-          final played = plyUci(i);
-          final prob = policy[played];
-
-          _maiaBucket[i] = entry.key;
-
-          final ranked = MaiaService.ranked(policy);
-
-          if (ranked.isNotEmpty) _maiaTopUci[i] = ranked.first.key;
-
-          final best = _pvUci[i].isNotEmpty ? _pvUci[i].first : null;
-
-          if (parseUci(best) != null) {
-            // مطابقة كاملة (from + to + promotion) عبر طبقة UCI الموحدة.
-            double? bp;
-
-            for (final e in policy.entries) {
-              if (isSameUciMove(e.key, best)) {
-                bp = (bp ?? 0) + e.value;
-              }
-            }
-
-            _maiaBestProb[i] = bp;
-          }
-
-          if (prob == null) continue;
-
-          _maiaProb[i] = prob;
-
-          if (qualities[i] == MoveQuality.best &&
-              _isBestEngineMove[i] &&
-              _isMaiaGreat(i, prob)) {
-            qualities[i] = MoveQuality.great;
-          }
-        }
-      } finally {
-        await session.close();
-      }
-    }
-  }
-
   // ------------------------------------------------------------
   // تمارين من أخطائك
   // ------------------------------------------------------------
 
   /// يستخرج من المباراة وضعيات فاتتك فيها نقلة قوية ويحفظها في
-  /// "تمارين من مبارياتك". إن عُرف اسمك (الإعدادات) تؤخذ أخطاؤك أنت
-  /// فقط، وإلا أخطاء الطرفين. الأفضلية للنقلات التي لا يجدها غالب
-  /// لاعبي المستوى (احتمالها عند Maia <= 35%).
+  /// "ألغاز من مبارياتك". إن عُرف اسمك (الإعدادات) تؤخذ أخطاؤك أنت
+  /// فقط، وإلا أخطاء الطرفين.
   Future<void> _collectPuzzles(List<MoveQuality> qualities) async {
     if (_cancelRequested || _analyzedCount < _fens.length) return;
 
@@ -644,10 +525,6 @@ class GameAnalysisController extends ChangeNotifier {
           continue;
         }
 
-        final bp = _maiaBestProb[i];
-
-        if (bp != null && bp > 0.35) continue;
-
         final sign = p.color == 'w' ? 1 : -1;
 
         // لا نختار وضعيات كانت خاسرة أصلًا.
@@ -679,8 +556,6 @@ class GameAnalysisController extends ChangeNotifier {
             line: pvToSan(p.fenBefore, _pvUci[i]),
             label: label,
             createdAt: DateTime.now().millisecondsSinceEpoch,
-            maiaBucket: _maiaBucket[i],
-            maiaBestProb: _maiaBestProb[i],
             theme: _puzzleTheme(i, qualities[i]),
             difficulty: _puzzleDifficulty(i),
             expectedResponse:
@@ -715,36 +590,14 @@ class GameAnalysisController extends ChangeNotifier {
     return q == MoveQuality.miss ? 'missed_tactic' : 'critical';
   }
 
-  /// صعوبة 1..3: كلما قلّ احتمال إيجاد النقلة عند Maia صعب أكثر.
+  /// صعوبة 1..3: كلما كانت النقلة الأفضل وحيدة (فرقها كبير عن ثاني
+  /// أفضل نقلة) صعب إيجادها أكثر.
   int _puzzleDifficulty(int i) {
-    final bp = _maiaBestProb[i];
+    final gap = _moveGapCp[i];
 
-    if (bp == null) return 2;
+    if (gap == null) return 2;
 
-    return bp < 0.10 ? 3 : (bp < 0.25 ? 2 : 1);
-  }
-
-  bool _isMaiaGreat(int i, double prob) {
-    if (prob > MaiaService.greatMaxProb) return false;
-
-    final p = _plies[i];
-
-    if (_legalMoveCount(p.fenBefore) <= 1) return false;
-
-    final second = _secondBestCpWhite[i];
-
-    if (second == null) return false;
-
-    final wpBest = winPercentWhite(cpAt(i));
-    final wpSecond = winPercentWhite(second);
-
-    final moverBest = p.color == 'w' ? wpBest : 100 - wpBest;
-    final moverSecond = p.color == 'w' ? wpSecond : 100 - wpSecond;
-
-    // وضعية محسومة: لا معنى لـ"رائعة".
-    if (moverBest < 8 || moverBest > 92) return false;
-
-    return (moverBest - moverSecond) >= MaiaService.greatMinGapWinPct;
+    return gap >= 300 ? 3 : (gap >= 120 ? 2 : 1);
   }
 
   Future<void> _runAnalysis(int token) async {
@@ -946,8 +799,6 @@ class GameAnalysisController extends ChangeNotifier {
       qualities.add(quality);
     }
 
-    // Maia: رفع "رائعة"، شرح الأخطاء، تقييم الأداء، واستخراج التمارين.
-    await _applyMaia(token, qualities);
 
     await _collectPuzzles(qualities);
 
@@ -1362,10 +1213,6 @@ class GameAnalysisController extends ChangeNotifier {
           tablebaseWdlBeforeWhite: _tbWdlWhite[i],
           tablebaseWdlAfterWhite: _tbWdlWhite[i + 1],
           bookInfo: _bookInfo[i],
-          maiaProbability: _maiaProb[i],
-          maiaBestProbability: _maiaBestProb[i],
-          maiaTopUci: _maiaTopUci[i],
-          maiaBucket: _maiaBucket[i],
         ),
       );
     }

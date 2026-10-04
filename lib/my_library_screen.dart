@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'analysis_cache.dart';
 import 'game_analysis_screen.dart';
 import 'game_library.dart';
-import 'maia_service.dart';
 
 /// مكتبة مبارياتي: كل المباريات المحفوظة (Chess.com / PGN) مع بحث
 /// وتصفية وحالة التحليل.
@@ -39,8 +38,7 @@ class _GameLibraryScreenState extends State<GameLibraryScreen> {
 
   Future<void> _load() async {
     final games = await GameLibraryStorage.instance.all();
-    final maia = await MaiaService.availableBuckets();
-    final settings = analysisSettingsKey(maia);
+    final settings = analysisSettingsKey();
 
     final analyzed = <String>{};
 
