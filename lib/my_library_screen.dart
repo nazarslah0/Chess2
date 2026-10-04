@@ -40,7 +40,7 @@ class _GameLibraryScreenState extends State<GameLibraryScreen> {
   Future<void> _load() async {
     final games = await GameLibraryStorage.instance.all();
     final maia = await MaiaService.availableBuckets();
-    final settings = 'maia:${maia.join(",")}';
+    final settings = analysisSettingsKey(maia);
 
     final analyzed = <String>{};
 
@@ -102,6 +102,7 @@ class _GameLibraryScreenState extends State<GameLibraryScreen> {
               blackLabel: g.black,
               resultLabel: g.result,
               sourceLabel: g.source == kSourceChessCom ? 'Chess.com' : 'PGN',
+              userName: g.username,
             ),
           ),
         )

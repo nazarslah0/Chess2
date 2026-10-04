@@ -9,7 +9,8 @@ import 'analysis_result.dart';
 import 'analysis_rules.dart';
 import 'app_settings.dart';
 import 'engine_service.dart';
-import 'game_library.dart' show libraryGameIdFromPgn;
+import 'game_library.dart'
+    show analysisSettingsKey, libraryGameIdFromPgn;
 import 'game_review_models.dart';
 import 'lichess_data_service.dart';
 import 'maia_service.dart';
@@ -18,6 +19,7 @@ import 'pgn_utils.dart';
 import 'puzzle_storage.dart';
 import 'pv_material.dart';
 import 'pv_utils.dart';
+import 'sacrifice_detector.dart';
 import 'uci_utils.dart';
 
 /// ناتج المحرك لوضعية واحدة أثناء الجمع (قبل تثبيته في الجداول).
@@ -225,7 +227,7 @@ class GameAnalysisController extends ChangeNotifier {
     // إعدادات التحليل المؤثرة على النتيجة (توفر أوزان Maia).
     final maia = await MaiaService.availableBuckets();
 
-    _settingsKey = 'maia:${maia.join(",")}';
+    _settingsKey = analysisSettingsKey(maia);
 
     _cacheKey = _cache.keyFor(
       pgn: pgn,
@@ -896,7 +898,11 @@ class GameAnalysisController extends ChangeNotifier {
 
       _moveGapCp[i] = gapCp;
 
-      if (quality == MoveQuality.best) {
+      // البريلينت يُفحص للنقلة الأفضل وكذلك "الممتازة": تضحية تُسترد
+      // بعد 3-4 نقلات قد يراها المحرك ثاني أفضل خط (فرق ضئيل) فلا
+      // تُصنَّف best رغم أنها نقلة رائعة.
+      if (quality == MoveQuality.best ||
+          quality == MoveQuality.excellent) {
         final upgraded = _tryUpgradeToBrilliant(
           plyIndex: i,
           ply: p,
@@ -908,7 +914,8 @@ class GameAnalysisController extends ChangeNotifier {
 
         if (upgraded != null) {
           quality = upgraded;
-        } else if (isGreatCandidate(
+        } else if (quality == MoveQuality.best &&
+            isGreatCandidate(
           cpBeforeWhite: cpBefore,
           secondBestCpWhite: secondBestWhite,
           color: p.color,
@@ -1019,8 +1026,50 @@ class GameAnalysisController extends ChangeNotifier {
 
       final movingType = movingPiece[1];
 
-      if (movingType == 'P' ||
-          movingType == 'K') {
+      final beforeGame = ch.Chess();
+      beforeGame.load(ply.fenBefore);
+
+      var legalCount = 0;
+
+      try {
+        legalCount = beforeGame.moves().length;
+      } catch (_) {
+        legalCount = 2;
+      }
+
+      // استرداد بديهي: أخذ مباشر على نفس المربع الذي أُخذ للتو.
+      final obviousRecapture = ply.isCapture &&
+          plyIndex > 0 &&
+          _plies[plyIndex - 1].isCapture &&
+          _plies[plyIndex - 1].to == ply.to;
+
+      // ------------------------------------------------------------
+      // المسار الجديد: تضحية تُسترد مع زيادة.
+      // نلعب النقلة ثم نتابع 3-4 أنصاف نقلات (وحتى أول وضعية
+      // هادئة)، فإن كان اللاعب قد تخلّى عن قطعة (عجز مادي >= 2) ثم
+      // استعادها وربح فوقها (أو انتهى الخط بمات) فهي بريلينت — أيًّا
+      // كانت القطعة المضحّى بها.
+      // ------------------------------------------------------------
+      final line = _sacrificeLineFor(plyIndex, ply);
+
+      final recoveredSacrifice = line != null &&
+          line.recoveredWithSurplus &&
+          !obviousRecapture &&
+          legalCount > 1 &&
+          // لا بريلينت إن كان اللاعب رابحًا بفارق ساحق أصلًا.
+          cpBeforeMover <= 350 &&
+          // بعد التضحية يجب أن يبقى الموقف سليمًا.
+          cpAfterMover >= -50;
+
+      if (recoveredSacrifice) {
+        return MoveQuality.brilliant;
+      }
+
+      // ------------------------------------------------------------
+      // المسار القديم: تضحية طويلة الأمد (تبقى المادة ناقصة لكن
+      // التقييم جيد) أو فكرة تكتيكية تربح مادة.
+      // ------------------------------------------------------------
+      if (movingType == 'P' || movingType == 'K') {
         return null;
       }
 
@@ -1042,8 +1091,6 @@ class GameAnalysisController extends ChangeNotifier {
       bool genuineSacrifice;
 
       if (sim != null && sim.quiet) {
-        // تضحية حقيقية: خسارة مادة فعلية (>= 2 نقطة) في نهاية الخط،
-        // مع بقاء التقييم جيدًا (ليست وضعية خاسرة).
         genuineSacrifice =
             sim.deficit >= 2 && cpAfterMover >= -50;
       } else {
@@ -1051,8 +1098,6 @@ class GameAnalysisController extends ChangeNotifier {
             _legacySacrificeCheck(ply, boardBefore, movingType);
       }
 
-      // فكرة تكتيكية بدون تضحية: نقلة هادئة (ليست أخذًا) يربح بها
-      // اللاعب مادة بالقوة في خط المحرك.
       final tacticalIdea = !genuineSacrifice &&
           !ply.isCapture &&
           sim != null &&
@@ -1061,23 +1106,6 @@ class GameAnalysisController extends ChangeNotifier {
 
       if (!genuineSacrifice && !tacticalIdea) {
         return null;
-      }
-
-      // استرداد بديهي: أخذ مباشر على نفس المربع الذي أُخذ للتو.
-      final obviousRecapture = ply.isCapture &&
-          plyIndex > 0 &&
-          _plies[plyIndex - 1].isCapture &&
-          _plies[plyIndex - 1].to == ply.to;
-
-      final beforeGame = ch.Chess();
-      beforeGame.load(ply.fenBefore);
-
-      var legalCount = 0;
-
-      try {
-        legalCount = beforeGame.moves().length;
-      } catch (_) {
-        legalCount = 2;
       }
 
       final brilliant = isBrilliantCandidate(
@@ -1097,6 +1125,45 @@ class GameAnalysisController extends ChangeNotifier {
       return null;
     }
   }
+
+  /// الخط الذي نتتبعه بعد النقلة [plyIndex]: أفضل لعب للمحرك من
+  /// الوضعية التالية إن كان طويلًا بما يكفي (4 أنصاف نقلات أو أكثر)،
+  /// وإلا النقلات التي لُعبت فعليًا في المباراة بعدها.
+  SacrificeLineResult? _sacrificeLineFor(int plyIndex, PgnPly ply) {
+    final pvAfter = plyIndex + 1 < _pvUci.length
+        ? _pvUci[plyIndex + 1]
+        : const <String>[];
+
+    final playedUci = _uciOfPly(ply);
+
+    if (pvAfter.length >= 4) {
+      final r = analyzeSacrificeLine(
+        fenBefore: ply.fenBefore,
+        moverColor: ply.color,
+        lineUci: <String>[playedUci, ...pvAfter],
+      );
+
+      if (r != null) return r;
+    }
+
+    // PV قصير أو غير متاح: نتابع بما حدث فعليًا في المباراة.
+    final actual = <String>[playedUci];
+
+    for (var j = plyIndex + 1;
+        j < _plies.length && actual.length < 8;
+        j++) {
+      actual.add(_uciOfPly(_plies[j]));
+    }
+
+    return analyzeSacrificeLine(
+      fenBefore: ply.fenBefore,
+      moverColor: ply.color,
+      lineUci: actual,
+    );
+  }
+
+  String _uciOfPly(PgnPly p) =>
+      '${p.from}${p.to}${(p.promotion ?? '').toLowerCase()}';
 
   /// الفحص القديم للتضحية (احتياطي عند غياب PV): قيمة القطعة
   /// المتحركة ناقص ما أخذته >= 2، والخصم يستطيع أخذها في الحال.

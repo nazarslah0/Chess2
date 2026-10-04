@@ -16,6 +16,16 @@ const String kSourcePgn = 'pgn';
 const int kLibraryAnalysisDepth = 14;
 const int kLibraryAnalysisMultiPv = 2;
 
+/// وسم قواعد التصنيف. غيّره عند أي تعديل في قواعد التصنيف (مثل
+/// البريلينت) فيتغير مفتاح الكاش وتُحلَّل المباريات المحفوظة من جديد
+/// بدل عرض تصنيفات قديمة.
+const String kAnalysisRulesTag = 'brl2';
+
+/// مفتاح إعدادات التحليل الموحَّد (أوزان Maia المتاحة + وسم القواعد).
+/// يجب أن يستخدمه المتحكم والمكتبة والإحصائيات معًا.
+String analysisSettingsKey(Iterable<dynamic> maiaBuckets) =>
+    'maia:${maiaBuckets.join(",")};rules:$kAnalysisRulesTag';
+
 /// معرّف ثابت للمباراة:
 ///  - Chess.com: `cc_<gameId>` من ترويسة Link / رابط المباراة.
 ///  - غير ذلك: `h_<hash>` من (White, Black, Date, Time, Result, PGN).

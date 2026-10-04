@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'account_storage.dart';
 import 'analysis_controller.dart';
 import 'analysis_result.dart';
 import 'analysis_rules.dart';
@@ -26,6 +27,11 @@ class GameAnalysisScreen extends StatefulWidget {
   final String? resultLabel;
   final String sourceLabel;
 
+  /// اسم المستخدم (صاحب الحساب). إن طابق أحد اللاعبين تُعرض الرقعة
+  /// بحيث يكون هو في الأسفل، أبيض كان أم أسود. إن لم يُمرَّر نستخدم
+  /// اسم حساب Chess.com المحفوظ.
+  final String? userName;
+
   const GameAnalysisScreen({
     super.key,
     required this.pgn,
@@ -33,6 +39,7 @@ class GameAnalysisScreen extends StatefulWidget {
     this.blackLabel,
     this.resultLabel,
     this.sourceLabel = '',
+    this.userName,
   });
 
   @override
@@ -99,9 +106,78 @@ class _GameAnalysisScreenState
 
     _boardState.loadFen(_c.fens.first);
 
+    _orientBoardToUser();
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _c.start();
     });
+  }
+
+  // ------------------------------------------------------------
+  // اتجاه الرقعة: المستخدم دائمًا في الأسفل
+  // ------------------------------------------------------------
+
+  static String _normName(String? s) => (s ?? '').trim().toLowerCase();
+
+  /// لون المستخدم في هذه المباراة ('w' / 'b') أو null إن لم يُعرف.
+  String? _userColorFor(String? name) {
+    final u = _normName(name);
+
+    if (u.isEmpty) return null;
+
+    final white = <String>{
+      _normName(_c.whiteName),
+      _normName(_headers['White']),
+    }..remove('');
+
+    final black = <String>{
+      _normName(_c.blackName),
+      _normName(_headers['Black']),
+    }..remove('');
+
+    final isWhite = white.contains(u);
+    final isBlack = black.contains(u);
+
+    // لو لعب ضد نفسه بنفس الاسم لا نقرّر شيئًا.
+    if (isWhite == isBlack) return null;
+
+    return isWhite ? 'w' : 'b';
+  }
+
+  void _applyOrientation(String color) {
+    final wantFlipped = color == 'b';
+
+    if (_boardState.flipped != wantFlipped) {
+      _boardState.flipBoard();
+    }
+  }
+
+  /// يوجّه الرقعة فور فتح الشاشة: بالاسم الممرَّر أولًا، وإلا باسم
+  /// حساب Chess.com المحفوظ (مباريات PGN الملصوقة مثلًا).
+  Future<void> _orientBoardToUser() async {
+    // المسار السريع (بلا انتظار): الاسم الممرَّر من المكتبة.
+    final direct = _userColorFor(widget.userName);
+
+    if (direct != null) {
+      _applyOrientation(direct);
+      return;
+    }
+
+    String? color;
+
+    try {
+      color = _userColorFor(
+        await AccountStorage.getChessComUsername(),
+      );
+    } catch (_) {
+      color = null;
+    }
+
+    final resolved = color;
+
+    if (resolved == null || !mounted) return;
+
+    setState(() => _applyOrientation(resolved));
   }
 
   final GameState _boardState = GameState();

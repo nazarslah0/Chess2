@@ -75,7 +75,7 @@ class _StatsScreenState extends State<StatsScreen> {
     }
 
     final maia = await MaiaService.availableBuckets();
-    final settings = 'maia:${maia.join(",")}';
+    final settings = analysisSettingsKey(maia);
 
     final games = _byUser[user]!;
     final items = <({LibraryGame game, GameAnalysis? analysis})>[];
