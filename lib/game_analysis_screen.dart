@@ -2212,7 +2212,7 @@ class _GameAnalysisScreenState
                   : null,
             ),
             child: Image.asset(
-              chessCraftPieceTheme.assetPath(color, 'P'),
+              chessComPieceTheme.assetPath(color, 'P'),
               fit: BoxFit.contain,
             ),
           ),
@@ -2564,7 +2564,7 @@ class _GameAnalysisScreenState
             children: [
               if (hasFigurine) ...[
                 Image.asset(
-                  chessCraftPieceTheme.assetPath(ply.color, first),
+                  chessComPieceTheme.assetPath(ply.color, first),
                   width: 20,
                   height: 20,
                 ),
@@ -2715,7 +2715,7 @@ class _GameAnalysisScreenState
               borderRadius: BorderRadius.circular(4),
             ),
             child: Image.asset(
-              chessCraftPieceTheme.assetPath(color, 'P'),
+              chessComPieceTheme.assetPath(color, 'P'),
               fit: BoxFit.contain,
             ),
           ),

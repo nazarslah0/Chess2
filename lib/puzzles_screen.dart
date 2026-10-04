@@ -12,16 +12,7 @@ import 'sound_service.dart';
 /// تمارين من مبارياتك: وضعيات فاتتك فيها نقلة قوية (يفوّتها غالبًا
 /// لاعبو مستواك بحسب Maia). تُستخرج تلقائيًا عند تحليل أي مباراة.
 class PuzzlesScreen extends StatefulWidget {
-  /// all: كل التمارين، mate: تمارين الكش مات فقط،
-  /// brilliant: النقلات الرائعة (!!) إن وُجدت وإلا كل التمارين.
-  final String mode;
-  final String title;
-
-  const PuzzlesScreen({
-    super.key,
-    this.mode = 'all',
-    this.title = 'ألغاز من مبارياتك',
-  });
+  const PuzzlesScreen({super.key});
 
   @override
   State<PuzzlesScreen> createState() => _PuzzlesScreenState();
@@ -64,14 +55,7 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
   }
 
   Future<void> _reload() async {
-    var items = await PuzzleStorage.load();
-
-    if (widget.mode == 'mate') {
-      items = items.where((e) => e.bestSan.contains('#')).toList();
-    } else if (widget.mode == 'brilliant') {
-      final b = items.where((e) => e.bestSan.contains('!!')).toList();
-      if (b.isNotEmpty) items = b;
-    }
+    final items = await PuzzleStorage.load();
 
     // غير المحلولة أولًا.
     items.sort((a, b) {
@@ -219,7 +203,7 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
       appBar: AppBar(
         title: Text(
           p == null
-              ? widget.title
+              ? 'تمارين من مبارياتك'
               : 'تمرين ${_index + 1} / ${_items.length}',
         ),
         actions: [
@@ -284,7 +268,7 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
             child: Text(
               [
                 if (p.label.isNotEmpty) p.label,
-                ?maiaText,
+                if (maiaText != null) maiaText,
                 if (p.solvedCount > 0) 'حُلّ ${p.solvedCount}×',
               ].join(' • '),
               style: TextStyle(fontSize: 12, color: Colors.grey.shade600),

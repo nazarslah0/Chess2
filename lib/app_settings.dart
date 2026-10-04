@@ -13,9 +13,17 @@ class AppSettings extends ChangeNotifier {
 
   /// الثيمات المتاحة: مظهر Chess.com أولًا (الافتراضي)، ثم بقية
   /// الثيمات.
-  static final List<BoardTheme> allBoardThemes = boardThemes;
+  static final List<BoardTheme> allBoardThemes = <BoardTheme>[
+    ...chessCraftBoardThemes,
+    chessComBoardTheme,
+    ...boardThemes,
+  ];
 
-  static final List<PieceTheme> allPieceThemes = pieceThemes;
+  static final List<PieceTheme> allPieceThemes = <PieceTheme>[
+    chessCraftPieceTheme,
+    chessComPieceTheme,
+    ...pieceThemes,
+  ];
 
   static const String _kBoard = 'chess2_board_theme';
   static const String _kPiece = 'chess2_piece_theme';

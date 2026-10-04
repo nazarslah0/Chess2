@@ -2,11 +2,10 @@ import 'package:flutter/material.dart';
 
 import 'main.dart' show PositionAnalyzerScreen;
 import 'pgn_import_screen.dart';
-import 'puzzles_screen.dart';
 import 'settings_screen.dart';
-import 'stats_screen.dart';
 
-/// الشاشة الرئيسية لـ ChessCraft: ستة أزرار بصور ذهبية.
+/// الشاشة الرئيسية الجديدة لـ ChessCraft.
+/// (الشاشة القديمة محفوظة في classic_home_screen.dart.)
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
@@ -14,24 +13,44 @@ class HomeScreen extends StatelessWidget {
     Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
   }
 
+  void _soon(BuildContext context) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          content: Text('قريبًا ✨'),
+          duration: Duration(seconds: 1),
+        ),
+      );
+  }
+
   @override
   Widget build(BuildContext context) {
     const base = 'assets/chesscraft';
 
+    // screen == null  =>  "قريبًا"
     final items = <_Item>[
-      _Item('stats', 'إحصائياتك', 'تابع تقدمك ونقاط قوتك وضعفك',
-          const StatsScreen()),
-      _Item('game', 'تحليل مباراة', 'حلل ملفات PGN أو مبارياتك',
-          const PgnImportScreen()),
-      _Item('position', 'تحليل وضعية', 'حلل أي وضعية على الرقعة',
-          const PositionAnalyzerScreen()),
-      _Item('brilliant', 'ألغاز بريليانت', 'تدرب على أجمل النقلات الرائعة',
-          const PuzzlesScreen(mode: 'brilliant', title: 'ألغاز بريليانت')),
-      _Item('mate', 'ألغاز جيك ميت', 'حل تمارين الكش مات',
-          const PuzzlesScreen(mode: 'mate', title: 'ألغاز جيك ميت')),
-      _Item('mine', 'ألغاز من مبارياتك', 'تمارين من أخطائك ومبارياتك',
-          const PuzzlesScreen()),
+      const _Item('stats', 'إحصائياتك', 'تابع تقدمك ونقاط قوتك وضعفك', null),
+      const _Item(
+          'game', 'تحليل مباراة', 'حلل ملفات PGN أو مبارياتك', 'game'),
+      const _Item(
+          'position', 'وضعية خاصة', 'حلل أي وضعية على الرقعة', 'position'),
+      const _Item(
+          'brilliant', 'ألغاز بريليانت', 'تدرب على أجمل النقلات الرائعة', null),
+      const _Item('mate', 'ألغاز جيك ميت', 'حل تمارين الكش مات', null),
+      const _Item(
+          'mine', 'ألغاز من مبارياتك', 'تمارين من أخطائك ومبارياتك', null),
     ];
+
+    Widget? target(String? key) {
+      switch (key) {
+        case 'game':
+          return const PgnImportScreen();
+        case 'position':
+          return const PositionAnalyzerScreen();
+      }
+      return null;
+    }
 
     return Scaffold(
       body: Container(
@@ -55,11 +74,8 @@ class HomeScreen extends StatelessWidget {
                         right: 10,
                         top: 0,
                         bottom: 0,
-                        child: Opacity(
-                          opacity: 0.95,
-                          child: Image.asset('$base/pieces/wK.png',
-                              height: 190),
-                        ),
+                        child: Image.asset('assets/pieces/ChessCraft/wK.png',
+                            height: 190),
                       ),
                       Positioned(
                         left: 18,
@@ -119,16 +135,24 @@ class HomeScreen extends StatelessWidget {
                     separatorBuilder: (_, _) => const SizedBox(height: 8),
                     itemBuilder: (context, i) {
                       final it = items[i];
+                      final screen = target(it.screenKey);
+                      final soon = screen == null;
+
                       return GestureDetector(
-                        onTap: () => _open(context, it.screen),
+                        onTap: () =>
+                            soon ? _soon(context) : _open(context, screen),
                         child: AspectRatio(
                           aspectRatio: 1000 / 205,
                           child: LayoutBuilder(
                             builder: (context, c) => Stack(
                               fit: StackFit.expand,
                               children: [
-                                Image.asset('$base/ui/btn_${it.id}.webp',
-                                    fit: BoxFit.fill),
+                                Opacity(
+                                  opacity: soon ? 0.7 : 1,
+                                  child: Image.asset(
+                                      '$base/ui/btn_${it.id}.webp',
+                                      fit: BoxFit.fill),
+                                ),
                                 Positioned(
                                   left: c.maxWidth * 0.215,
                                   right: c.maxWidth * 0.36,
@@ -175,6 +199,29 @@ class HomeScreen extends StatelessWidget {
                                     ],
                                   ),
                                 ),
+                                if (soon)
+                                  Positioned(
+                                    right: c.maxWidth * 0.13,
+                                    top: 10,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: Colors.black54,
+                                        borderRadius:
+                                            BorderRadius.circular(10),
+                                        border: Border.all(
+                                            color: const Color(0xFFE7B84B)),
+                                      ),
+                                      child: const Text(
+                                        'قريبًا',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: Color(0xFFE7B84B),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
                               ],
                             ),
                           ),
@@ -196,7 +243,7 @@ class _Item {
   final String id;
   final String title;
   final String subtitle;
-  final Widget screen;
+  final String? screenKey;
 
-  _Item(this.id, this.title, this.subtitle, this.screen);
+  const _Item(this.id, this.title, this.subtitle, this.screenKey);
 }
