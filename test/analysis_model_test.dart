@@ -47,10 +47,6 @@ MoveAnalysisResult sampleMove({
         lichessGames: 5000,
         lichessPositionGames: 9000,
       ),
-      maiaProbability: 0.07,
-      maiaBestProbability: 0.31,
-      maiaTopUci: 'd2d4',
-      maiaBucket: 1500,
     );
 
 void main() {
@@ -100,10 +96,6 @@ void main() {
     expect(b.bookInfo!.isBook, isTrue);
     expect(b.bookInfo!.mastersGames, 120);
     expect(b.bookInfo!.lichessPositionGames, 9000);
-    expect(b.maiaProbability, 0.07);
-    expect(b.maiaBestProbability, 0.31);
-    expect(b.maiaTopUci, 'd2d4');
-    expect(b.maiaBucket, 1500);
   });
 
   test('تصنيف مجهول في JSON يعود إلى good ولا ينهار', () {
@@ -133,7 +125,7 @@ void main() {
       engineVersion: kEngineVersion,
       depth: 14,
       multiPv: 2,
-      settingsKey: 'maia:1500',
+      settingsKey: 'x:1500',
       createdAt: 123,
       explorerAvailable: true,
       positions: const [
@@ -163,7 +155,7 @@ void main() {
     expect(b.engineVersion, 'stockfish19');
     expect(b.depth, 14);
     expect(b.multiPv, 2);
-    expect(b.settingsKey, 'maia:1500');
+    expect(b.settingsKey, 'x:1500');
     expect(b.explorerAvailable, isTrue);
     expect(b.positions.length, 2);
     expect(b.moves.length, 1);

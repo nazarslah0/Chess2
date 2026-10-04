@@ -108,7 +108,7 @@ void main() {
           pgn: '1. e4 *',
           depth: 14,
           multiPv: 2,
-          settings: 'maia:1500',
+          settings: 'x:1500',
         ),
         isNot(base),
       );
