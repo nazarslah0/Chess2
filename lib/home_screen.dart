@@ -26,7 +26,7 @@ class HomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const base = 'assets/chesscraft';
+    const base = 'assets';
 
     // screen == null  =>  "قريبًا"
     final items = <_Item>[

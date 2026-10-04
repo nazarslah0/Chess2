@@ -183,7 +183,7 @@ const BoardTheme chessCraftMarbleBoardTheme = BoardTheme(
   selected: Color(0x662563EB),
   target: Color(0x662563EB),
   border: Color(0xFF3A2E22),
-  imageAsset: 'assets/chesscraft/boards/marble.webp',
+  imageAsset: 'assets/boards/chesscraft-marble.webp',
 );
 
 const BoardTheme chessCraftWoodBoardTheme = BoardTheme(
@@ -195,7 +195,7 @@ const BoardTheme chessCraftWoodBoardTheme = BoardTheme(
   selected: Color(0x662563EB),
   target: Color(0x662563EB),
   border: Color(0xFF3A2E22),
-  imageAsset: 'assets/chesscraft/boards/wood.webp',
+  imageAsset: 'assets/boards/chesscraft-wood.webp',
 );
 
 const BoardTheme chessCraftGreenBoardTheme = BoardTheme(
@@ -207,7 +207,7 @@ const BoardTheme chessCraftGreenBoardTheme = BoardTheme(
   selected: Color(0x662563EB),
   target: Color(0x662563EB),
   border: Color(0xFF3A2E22),
-  imageAsset: 'assets/chesscraft/boards/green.webp',
+  imageAsset: 'assets/boards/chesscraft-green.webp',
 );
 
 const BoardTheme chessCraftBlueBoardTheme = BoardTheme(
@@ -219,7 +219,7 @@ const BoardTheme chessCraftBlueBoardTheme = BoardTheme(
   selected: Color(0x662563EB),
   target: Color(0x662563EB),
   border: Color(0xFF3A2E22),
-  imageAsset: 'assets/chesscraft/boards/blue.webp',
+  imageAsset: 'assets/boards/chesscraft-blue.webp',
 );
 
 const List<BoardTheme> chessCraftBoardThemes = [
