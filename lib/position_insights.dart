@@ -300,7 +300,7 @@ class _PositionInsightsPanelState extends State<PositionInsightsPanel> {
                     style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
                 ),
-                if (trailing != null) trailing,
+                ?trailing,
               ],
             ),
             const SizedBox(height: 8),

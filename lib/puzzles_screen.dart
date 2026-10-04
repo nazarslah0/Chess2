@@ -284,7 +284,7 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
             child: Text(
               [
                 if (p.label.isNotEmpty) p.label,
-                if (maiaText != null) maiaText,
+                ?maiaText,
                 if (p.solvedCount > 0) 'حُلّ ${p.solvedCount}×',
               ].join(' • '),
               style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
