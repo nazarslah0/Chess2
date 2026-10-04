@@ -27,11 +27,11 @@ flutter:
 
   assets:
     # Chess pieces
-    - assets/pieces/classic/
-    - assets/pieces/flat/
-    - assets/pieces/wood/
-    - assets/pieces/Chesscom/
-    - assets/pieces/ChessCraft/
+    - assets/classic/
+    - assets/flat/
+    - assets/wood/
+    - assets/Chesscom/
+    - assets/ChessCraft/
 
     # Maia weights (lc0 .pb.gz) - see assets/maia/README.txt
     - assets/maia/
