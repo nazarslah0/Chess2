@@ -146,7 +146,7 @@ SacrificeLineResult? analyzeSacrificeLine({
 
       final ok = g.move(mv);
 
-      if (ok == false || ok == null) break;
+      if (!ok) break;
 
       played++;
 
