@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:chess/chess.dart' as ch;
 import 'package:flutter/foundation.dart';

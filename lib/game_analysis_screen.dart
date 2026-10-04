@@ -64,7 +64,6 @@ class _GameAnalysisScreenState
   List<List<String>> get _pvUci => _c.pvUci;
   List<MoveQuality> get _qualities => _c.qualities;
   List<bool> get _isBestEngineMove => _c.isBestEngineMove;
-  List<int?> get _secondBestCpWhite => _c.secondBestCpWhite;
   List<int?> get _moveGapCp => _c.moveGapCp;
   List<int?> get _tbWdlWhite => _c.tbWdlWhite;
   List<BookMoveInfo?> get _bookInfo => _c.bookInfo;
@@ -2781,7 +2780,7 @@ class _GameAnalysisScreenState
   }
 
   /// تفاصيل النقلة المحددة على الرسم البياني (من
-  /// List<MoveAnalysisResult> نفسها التي تقرأها بقية الواجهة).
+  /// `List<MoveAnalysisResult>` نفسها التي تقرأها بقية الواجهة).
   Widget _buildGraphMoveInfo() {
     final results = _c.results;
     final k = _currentIndex - 1;
