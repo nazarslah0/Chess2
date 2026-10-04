@@ -1,5 +1,5 @@
 name: chess_analyzer
-description: "ChessCraft - analyze, play, learn, improve."
+description: "Chess position analyzer with a real Stockfish 19 engine."
 publish_to: "none"
 version: 1.0.0+1
 
@@ -26,13 +26,22 @@ flutter:
   uses-material-design: true
 
   assets:
-    # ChessCraft pieces / boards / UI
-    - assets/chesscraft/pieces/
-    - assets/chesscraft/boards/
-    - assets/chesscraft/ui/
+    # Chess pieces
+    - assets/pieces/classic/
+    - assets/pieces/flat/
+    - assets/pieces/wood/
+    - assets/pieces/Chesscom/
+    - assets/pieces/ChessCraft/
 
     # Maia weights (lc0 .pb.gz) - see assets/maia/README.txt
     - assets/maia/
+
+    # ChessCraft UI + boards
+    - assets/chesscraft/boards/
+    - assets/chesscraft/ui/
+
+    # Chess boards
+    - assets/chessground/boards/
 
     # New chess sounds only
     - assets/sounds/move.mp3
