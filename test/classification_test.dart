@@ -58,6 +58,158 @@ void main() {
     });
   });
 
+  group('تصنيف: نقلة إجبارية، خاسر أصلًا، عتبات قابلة للضبط', () {
+    test('نقلة إجبارية = best مهما كان التقييم', () {
+      expect(
+        classifyMove(
+          cpBeforeWhite: 0,
+          cpAfterWhite: -900,
+          color: 'w',
+          wasBestMove: false,
+          onlyLegalMove: true,
+        ),
+        MoveQuality.best,
+      );
+    });
+
+    test('وضعية خاسرة أصلًا: لا mistake/blunder', () {
+      // -480 للأبيض: احتمال فوزه ~14.6% (خاسر أصلًا). النزول إلى
+      // -1000 يخسر ~12% من احتمال الفوز = "خطأ" في وضعية متكافئة.
+      final q = classifyMove(
+        cpBeforeWhite: -480,
+        cpAfterWhite: -1000,
+        color: 'w',
+        wasBestMove: false,
+      );
+
+      expect(q, MoveQuality.inaccuracy);
+
+      // نفس الخسارة تقريبًا في وضعية أفضل تبقى خطأ.
+      expect(
+        classifyMove(
+          cpBeforeWhite: 0,
+          cpAfterWhite: -250,
+          color: 'w',
+          wasBestMove: false,
+        ),
+        MoveQuality.mistake,
+      );
+    });
+
+    test('نفس الخسارة في وضعية متكافئة = خطأ فادح', () {
+      expect(
+        classifyMove(
+          cpBeforeWhite: 0,
+          cpAfterWhite: -500,
+          color: 'w',
+          wasBestMove: false,
+        ),
+        MoveQuality.blunder,
+      );
+    });
+
+    test('العتبات قابلة للضبط دون تغيير الحساب', () {
+      const strict = ClassificationThresholds(
+        excellentMaxLoss: 0.5,
+        goodMaxLoss: 1,
+        inaccuracyMaxLoss: 2,
+        mistakeMaxLoss: 4,
+      );
+
+      // خسارة ~4.59% في win%: good افتراضيًا، لكن mistake مع الصارمة؟
+      // (> mistakeMaxLoss=4) => blunder.
+      expect(
+        classifyMove(
+          cpBeforeWhite: 0,
+          cpAfterWhite: -50,
+          color: 'w',
+          wasBestMove: false,
+        ),
+        MoveQuality.good,
+      );
+
+      expect(
+        classifyMove(
+          cpBeforeWhite: 0,
+          cpAfterWhite: -50,
+          color: 'w',
+          wasBestMove: false,
+          thresholds: strict,
+        ),
+        MoveQuality.blunder,
+      );
+    });
+  });
+
+  group('Brilliant: عدة شروط معًا', () {
+    bool brilliant({
+      MoveQuality q = MoveQuality.best,
+      bool sacrifice = true,
+      int cp = 0,
+      bool only = false,
+      String piece = 'N',
+      int? gap = 120,
+      bool recapture = false,
+      bool tactical = false,
+      bool holds = true,
+    }) =>
+        isBrilliantCandidate(
+          baseQuality: q,
+          isSacrifice: sacrifice,
+          cpBeforeMover: cp,
+          onlyLegalMove: only,
+          movingPieceType: piece,
+          secondBestGapCp: gap,
+          isObviousRecapture: recapture,
+          isTacticalIdea: tactical,
+          positionHoldsAfter: holds,
+        );
+
+    test('تضحية + أفضل نقلة + فجوة كافية', () {
+      expect(brilliant(), isTrue);
+    });
+
+    test('أفضل نقلة بدون تضحية ليست Brilliant', () {
+      expect(brilliant(sacrifice: false), isFalse);
+    });
+
+    test('ليست أفضل نقلة', () {
+      expect(brilliant(q: MoveQuality.good), isFalse);
+    });
+
+    test('نقلة إجبارية', () {
+      expect(brilliant(only: true), isFalse);
+    });
+
+    test('استرداد بديهي', () {
+      expect(brilliant(recapture: true), isFalse);
+    });
+
+    test('وضعية محسومة أصلًا', () {
+      expect(brilliant(cp: 800), isFalse);
+      expect(brilliant(cp: -800), isFalse);
+    });
+
+    test('الوضعية تنهار بعد النقلة', () {
+      expect(brilliant(holds: false), isFalse);
+    });
+
+    test('فجوة صغيرة أو مجهولة', () {
+      expect(brilliant(gap: 30), isFalse);
+      expect(brilliant(gap: null), isFalse);
+    });
+
+    test('فكرة تكتيكية بلا تضحية تتطلب فجوة كبيرة جدًا', () {
+      expect(brilliant(sacrifice: false, tactical: true, gap: 120), isFalse);
+      expect(brilliant(sacrifice: false, tactical: true, gap: 200), isTrue);
+    });
+
+    test('البيدق والملك لا يكونان Brilliant', () {
+      expect(brilliant(piece: 'P'), isFalse);
+      expect(brilliant(piece: 'K'), isFalse);
+    });
+  });
+
   group('Tablebase: نتيجة مضمونة', () {
     MoveQuality tb(
       String color,
