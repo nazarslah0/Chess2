@@ -36,12 +36,11 @@ flutter:
     # Maia weights (lc0 .pb.gz) - see assets/maia/README.txt
     - assets/maia/
 
-    # ChessCraft UI + boards
-    - assets/chesscraft/boards/
-    - assets/chesscraft/ui/
+    # Boards (كل البوردات في مكان واحد)
+    - assets/boards/
 
-    # Chess boards
-    - assets/chessground/boards/
+    # UI (الشعار وأزرار الواجهة)
+    - assets/ui/
 
     # New chess sounds only
     - assets/sounds/move.mp3
