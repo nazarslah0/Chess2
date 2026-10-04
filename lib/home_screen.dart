@@ -74,7 +74,7 @@ class HomeScreen extends StatelessWidget {
                         right: 10,
                         top: 0,
                         bottom: 0,
-                        child: Image.asset('assets/pieces/ChessCraft/wK.png',
+                        child: Image.asset('assets/ChessCraft/wK.png',
                             height: 190),
                       ),
                       Positioned(

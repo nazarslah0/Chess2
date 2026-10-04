@@ -59,7 +59,7 @@ class PieceTheme {
     String colorLetter,
     String typeLetter,
   ) {
-    return 'assets/pieces/$assetFolder/'
+    return 'assets/$assetFolder/'
         '$colorLetter$typeLetter.png';
   }
 }
