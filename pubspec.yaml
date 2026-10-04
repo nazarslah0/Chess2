@@ -1,5 +1,5 @@
 name: chess_analyzer
-description: "ChessCraft: chess game and position analyzer with a real Stockfish engine."
+description: "ChessCraft - analyze, play, learn, improve."
 publish_to: "none"
 version: 1.0.0+1
 
@@ -15,6 +15,7 @@ dependencies:
   http: ^1.2.2
   shared_preferences: ^2.5.3
   path_provider: ^2.1.5
+  lc0: ^0.1.0
 
 dev_dependencies:
   flutter_test:
@@ -25,19 +26,15 @@ flutter:
   uses-material-design: true
 
   assets:
-    # ChessCraft home screen (buttons, logo, background)
-    - assets/images/
+    # ChessCraft pieces / boards / UI
+    - assets/chesscraft/pieces/
+    - assets/chesscraft/boards/
+    - assets/chesscraft/ui/
 
-    # Chess pieces
-    - assets/pieces/classic/
-    - assets/pieces/flat/
-    - assets/pieces/wood/
-    - assets/pieces/Chesscom/
+    # Maia weights (lc0 .pb.gz) - see assets/maia/README.txt
+    - assets/maia/
 
-    # Chess boards
-    - assets/chessground/boards/
-
-    # Chess sounds
+    # New chess sounds only
     - assets/sounds/move.mp3
     - assets/sounds/take.mp3
     - assets/sounds/snap.mp3

@@ -72,35 +72,3 @@
 2. شرح الأخطاء: «خطأ شائع عند هذا المستوى» أو «زلة غير معتادة» في بطاقة النقلة.
 3. تمارين من مبارياتك (`lib/puzzles_screen.dart`, `lib/puzzle_storage.dart`): تُستخرج تلقائيًا بعد اكتمال تحليل أي مباراة (حتى 3 لكل مباراة). اكتب اسمك في الإعدادات ليأخذ التطبيق أخطاءك أنت فقط.
 4. الأداء مقابل المتوقع: بطاقة في ملخص المباراة تقارن عدد أفضل نقلات Stockfish التي وجدتها بما يتوقعه Maia لتصنيفك.
-
-## 9. المرحلة 1: الاستقرار والدقة (جلسات المحرك، UCI الموحد، الأسهم، الاختبارات)
-- `lib/engine_transport.dart` (جديد): واجهة اتصال بالمحرك + تنفيذ Android الحقيقي. تسمح باختبار المحرك بمحرك وهمي.
-- `lib/engine_service.dart` (مُعاد كتابته مع الحفاظ على الواجهة العامة): كل `analyze()` يُنشئ `AnalysisRequest` بمعرّف فريد (id, fen, depth, multipv, ply, startedAt).
-  - كل `go` يُسجَّل في طابور FIFO بانتظار `bestmove` الخاص به، و`bestmove` يُقبل فقط إذا كان صاحبه هو الطلب الحالي؛ وإلا يُستهلك ويُتجاهل.
-  - أسطر `info` تُقبل فقط ما دام أقدم بحث معلّق هو الطلب الحالي، ويُحسب لون الدور من FEN الطلب نفسه.
-  - مزامنة `isready/readyok` حقيقية (كانت سابقًا لا تنتظر فعليًا لأن `ready` يبقى true).
-  - طلب تجاوزه طلب أحدث أو أُوقف أثناء الانتظار لا يرسل `go`.
-  - أسطر `lowerbound/upperbound` غير النهائية تُهمل.
-- `lib/uci_utils.dart`: أُضيف `parseUci` و`firstValidUci`؛ وكل تحليل UCI بـ`substring/length` في `main.dart` و`game_analysis_screen.dart` و`maia_play_screen.dart` و`position_insights.dart` و`puzzles_screen.dart` و`pv_material.dart` صار عبره. أُزيلت مقارنة أول 4 أحرف التي كانت تخلط الترقيات (e7e8q مع e7e8n).
-- `lib/board_geometry.dart` (جديد): `squareToGrid` دالة نقية لاتجاه الرقعة، تستعملها الأسهم وعلامات الجودة.
-- `applyTablebaseClassification` و`TablebaseService.whiteWdlFromCategory` صارتا دوال نقية قابلة للاختبار.
-- `_pvToSan` يستخدم `findLegalMove` فيطابق الترقية بدقة (SAN صحيح لـ e8=N).
-- اختبارات في `test/`: `uci_test`, `arrow_geometry_test`, `castling_promotion_test`, `engine_session_test`, `classification_test`, `pgn_test`.
-
-## 10. المرحلة 2: المصدر الموحَّد، المتحكم، والكاش الدائم
-- `lib/analysis_result.dart`: `PositionAnalysis` (ناتج المحرك لكل وضعية) و`MoveAnalysisResult` (كل ما يخص النقلة: تقييم من منظور اللاعب والأبيض، الخسارة، التصنيف، Tablebase قبل/بعد، الكتاب، Maia، الفجوة) و`GameAnalysis` (n+1 وضعية + n نقلة + `analysisVersion` + المحرك + العمق + MultiPV + إعدادات التحليل) وكلها بـJSON. `SavedGame` يحفظ PGN واللاعبين والنتيجة والتاريخ.
-- `lib/analysis_controller.dart`: `GameAnalysisController` (ChangeNotifier) ينقل خط التحليل كله خارج الواجهة: Stockfish عبر EngineService، Tablebase، Opening Explorer، التصنيف، Maia، التمارين، بناء `MoveAnalysisResult`، والحفظ والتحميل من الكاش. شاشة التحليل صارت تقرأ حالته فقط (4662 ← ~3570 سطرًا).
-- `lib/analysis_cache.dart`: كاش دائم بطبقتين: ذاكرة + ملفات JSON مضغوطة gzip في مجلد التطبيق (بلا اعتماد جديد؛ path_provider موجود). المفتاح = بصمة 64 بت لـ (PGN + المحرك + العمق + MultiPV + إصدار التحليل + إعدادات التحليل مثل أوزان Maia المتوفرة). ملف إصدار تحليله مختلف أو تالف أو غير متناسق يُتجاهل ويُحذف. كتابة ذرية (tmp ثم rename) وإخراج LRU (100 تحليل).
-- `lib/pv_utils.dart`: `pvToSan` مشتركة.
-- اختبارات جديدة: `analysis_model_test`, `analysis_cache_test`, `analysis_controller_test` (بما فيها: تحليل ← إغلاق ← فتح ← تحميل من الكاش بلا إرسال أي أمر لـStockfish).
-
-## 11. المرحلة 3: قوة التحليل
-- `lib/analysis_rules.dart` (جديد، نقي بلا Flutter): 
-  - **ACPL** (`computeAcpl`): الخسارة من منظور اللاعب الذي نفّذ النقلة، بعد تقييد التقييمين ±1000 قرن (كان الحساب السابق يضم قيمة المات 100000 فيفسد المتوسط) وبحد أقصى 1000 للنقلة. لكل لاعب ولكل مرحلة (افتتاح/وسط/نهاية)، واستثناء الكتاب اختياري.
-  - **اللحظات الحرجة** (`detectCriticalMoments` / `markCriticalMoments`): تحوّل حاسم في احتمال الفوز (≥15%) بخطأ، أو نقلة وحيدة أُدّيت بدقة (فارق ≥15% عن ثاني أفضل)، أو تغيّر نتيجة Tablebase؛ بشرط ألا تكون الوضعية محسومة أصلًا، مع وزن أقل للافتتاح وإضافة للأهمية التكتيكية (تغيّر المادة). ليست كل Mistake حرجة. الإعدادات في `CriticalMomentConfig`.
-  - **حكم Tablebase** (`tablebaseVerdict`): lostWin / missedWin / blunder / best / gain.
-- `classifyMove`: عتبات منفصلة (`ClassificationThresholds`) قابلة للضبط؛ النقلة الإجبارية = best؛ وضعية خاسرة أصلًا (احتمال فوز ≤15%) لا تُصنَّف فيها mistake/blunder؛ ونقلة هي ثاني أفضل خط للمحرك (MultiPV) تُقيَّم بتقييم ذلك الخط نفسه بدل بحث مستقل.
-- `isBrilliantCandidate`: عدة شروط: أفضل نقلة + تضحية فعلية (أو فكرة تكتيكية بفارق ≥150) + فارق ≥80 + وضعية غير محسومة + وضعية لا تنهار بعد النقلة + ليست استردادًا بديهيًا ولا إجبارية. Maia لا تدخل في Brilliant (تُستخدم لـ«رائعة» والشرح فقط).
-- `MoveAnalysisResult`: حقول جديدة `criticalScore` و`criticalKind` و`tablebaseVerdict`، و`PositionAnalysis.secondBestUci`. رُفع `kAnalysisVersion` إلى 2 فتُتجاهل التحليلات المحفوظة بالقواعد القديمة تلقائيًا.
-- الواجهة: ACPL لكل مرحلة في ملخص المراحل، قائمة اللحظات الحرجة من `MoveAnalysisResult` (مرتبة بالدرجة مع نوع كل لحظة)، والرسم البياني يعلّم الحرجة بحلقة ذهبية و«رائعة/مدهشة» بنقاط، وبطاقة تفاصيل النقلة المختارة تحته (التقييم قبل/بعد، الخسارة، الأفضل، التصنيف).
-- اختبارات: `analysis_rules_test.dart` وتوسيع `classification_test.dart`.
