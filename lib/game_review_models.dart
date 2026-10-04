@@ -188,23 +188,63 @@ int cpFromWhitePerspective(
   return (evalPawns * 100).round();
 }
 
+/// عتبات تصنيف النقلات، منفصلة عن تقييم المحرك كي يمكن ضبطها
+/// مستقبلًا دون المساس بالحساب. القيم الافتراضية قريبة من المنشور
+/// عن chess.com: ممتاز ≤2% ، جيد ≤5% ، غير دقيقة ≤10% ، خطأ ≤20% ،
+/// وما فوق ذلك خطأ فادح (كلها خسارة في احتمال الفوز %).
+class ClassificationThresholds {
+  final double excellentMaxLoss;
+  final double goodMaxLoss;
+  final double inaccuracyMaxLoss;
+  final double mistakeMaxLoss;
+
+  /// فرصة ضائعة: كان اللاعب أعلى من [missBeforeCp] ونزل تحت
+  /// [missAfterCp].
+  final int missBeforeCp;
+  final int missAfterCp;
+
+  /// وضعية "خاسرة أصلًا": احتمال فوز اللاعب قبل النقلة ≤ هذه القيمة.
+  /// لا يُصنَّف فيها خطأ/خطأ فادح (بحد أقصى "غير دقيقة")، لأن كل
+  /// النقلات تقريبًا سيئة بنفس القدر.
+  final double alreadyLostWinPct;
+
+  const ClassificationThresholds({
+    this.excellentMaxLoss = 2,
+    this.goodMaxLoss = 5,
+    this.inaccuracyMaxLoss = 10,
+    this.mistakeMaxLoss = 20,
+    this.missBeforeCp = 400,
+    this.missAfterCp = 100,
+    this.alreadyLostWinPct = 15,
+  });
+}
+
+const ClassificationThresholds kDefaultThresholds =
+    ClassificationThresholds();
+
 /// يصنّف نقلة بناءً على الخسارة في احتمال الفوز (win%) من منظور
 /// اللاعب الذي لعبها — وليس على سنتيبون مجرّد، لأن خسارة 100
 /// سنتيبون في وضعية متكافئة خطأ كبير، بينما في وضعية فائزة
-/// بعشرة بيادق لا تغيّر شيئًا. العتبات قريبة من المنشور عن
-/// chess.com: ممتاز ≤2% ، جيد ≤5% ، غير دقيقة ≤10% ، خطأ ≤20% ،
-/// وما فوق ذلك خطأ فادح.
+/// بعشرة بيادق لا تغيّر شيئًا.
 ///
 /// - cpBeforeWhite: تقييم الوضعية قبل النقلة (منظور الأبيض)
 /// - cpAfterWhite: تقييم الوضعية بعد النقلة (منظور الأبيض)
 /// - color: من لعب النقلة ('w' أو 'b')
 /// - wasBestMove: هل طابقت النقلة أفضل نقلة اقترحها المحرك
+/// - onlyLegalMove: النقلة الوحيدة القانونية (إجبارية) => best دائمًا
 MoveQuality classifyMove({
   required int cpBeforeWhite,
   required int cpAfterWhite,
   required String color,
   required bool wasBestMove,
+  bool onlyLegalMove = false,
+  ClassificationThresholds thresholds = kDefaultThresholds,
 }) {
+  // نقلة إجبارية لا يمكن أن تكون خطأ.
+  if (onlyLegalMove) {
+    return MoveQuality.best;
+  }
+
   final sign = color == 'w' ? 1 : -1;
 
   final beforeMover = cpBeforeWhite * sign;
@@ -212,7 +252,8 @@ MoveQuality classifyMove({
 
   // فرصة ضائعة: كانت الوضعية حاسمة لصالح اللاعب (فوز واضح أو
   // كش مات وشيك) وأضاعها بالكامل.
-  if (beforeMover >= 400 && afterMover < 100) {
+  if (beforeMover >= thresholds.missBeforeCp &&
+      afterMover < thresholds.missAfterCp) {
     return MoveQuality.miss;
   }
 
@@ -227,23 +268,29 @@ MoveQuality classifyMove({
     return MoveQuality.best;
   }
 
-  if (winLoss <= 2) {
-    return MoveQuality.excellent;
+  final moverWinBefore = color == 'w' ? wpBefore : 100 - wpBefore;
+
+  MoveQuality q;
+
+  if (winLoss <= thresholds.excellentMaxLoss) {
+    q = MoveQuality.excellent;
+  } else if (winLoss <= thresholds.goodMaxLoss) {
+    q = MoveQuality.good;
+  } else if (winLoss <= thresholds.inaccuracyMaxLoss) {
+    q = MoveQuality.inaccuracy;
+  } else if (winLoss <= thresholds.mistakeMaxLoss) {
+    q = MoveQuality.mistake;
+  } else {
+    q = MoveQuality.blunder;
   }
 
-  if (winLoss <= 5) {
-    return MoveQuality.good;
-  }
-
-  if (winLoss <= 10) {
+  // خاسر أصلًا: لا نصنّف كل نقلة سيئة "خطأ فادح".
+  if (moverWinBefore <= thresholds.alreadyLostWinPct &&
+      (q == MoveQuality.mistake || q == MoveQuality.blunder)) {
     return MoveQuality.inaccuracy;
   }
 
-  if (winLoss <= 20) {
-    return MoveQuality.mistake;
-  }
-
-  return MoveQuality.blunder;
+  return q;
 }
 
 /// يطبّق نتيجة Tablebase المضمونة (من منظور الأبيض: 1 / 0 / -1)
@@ -496,25 +543,34 @@ bool isBrilliantCandidate({
   // نصنّف "رائعة" أبدًا، تماشيًا مع: "إذا لم تكن البيانات
   // كافية، لا تصنف النقلة Brilliant".
   required int? secondBestGapCp,
+  // نقلة أخذ مباشر لقطعة أُخذت للتو (استرداد بديهي): لا تُعدّ
+  // رائعة مهما كان.
+  bool isObviousRecapture = false,
+  // نقلة هادئة بفكرة تكتيكية واضحة (يربح اللاعب مادة بالقوة في خط
+  // المحرك) كبديل عن التضحية.
+  bool isTacticalIdea = false,
+  // بعد النقلة: هل ما زال اللاعب في وضع جيد (ليس خاسرًا)؟
+  bool positionHoldsAfter = true,
 }) {
   if (baseQuality != MoveQuality.best) {
     return false;
   }
 
-  if (onlyLegalMove) {
+  if (onlyLegalMove || isObviousRecapture) {
     return false;
   }
 
-  if (movingPieceType == 'P' ||
-      movingPieceType == 'K') {
+  if (movingPieceType == 'K') {
     return false;
   }
 
+  // وضعية محسومة أصلًا (فوز مضمون تقريبًا أو خسارة): لا قيمة
+  // لـ"رائعة" فيها.
   if (cpBeforeMover.abs() >= 600) {
     return false;
   }
 
-  if (!isSacrifice) {
+  if (!positionHoldsAfter) {
     return false;
   }
 
@@ -523,13 +579,21 @@ bool isBrilliantCandidate({
     return false;
   }
 
-  // يجب أن تكون هذه النقلة أفضل بوضوح من البديل التالي —
-  // أي أنها لم تكن مجرد واحدة من عدة خيارات متكافئة، بل
-  // الحل الوحيد القوي فعلًا في هذه الوضعية (معيار "Whether
-  // it is the only strong move" المطلوب).
-  const minGapCp = 80;
+  if (isSacrifice) {
+    // يجب أن تكون هذه النقلة أفضل بوضوح من البديل التالي — أي أنها
+    // لم تكن مجرد واحدة من عدة خيارات متكافئة، بل الحل الوحيد
+    // القوي فعلًا في هذه الوضعية.
+    return secondBestGapCp >= 80 &&
+        movingPieceType != 'P';
+  }
 
-  return secondBestGapCp >= minGapCp;
+  // بدون تضحية: تُقبل فقط فكرة تكتيكية واضحة بفارق كبير جدًا عن
+  // البديل التالي.
+  if (isTacticalIdea) {
+    return secondBestGapCp >= 150 && movingPieceType != 'P';
+  }
+
+  return false;
 }
 
 

@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import 'analysis_cache.dart';
 import 'analysis_result.dart';
+import 'analysis_rules.dart';
 import 'app_settings.dart';
 import 'engine_service.dart';
 import 'game_review_models.dart';
@@ -27,6 +28,7 @@ class _Eval {
   /// تقييم ثاني أفضل نقلة (منظور الأبيض، بالقرن) إن توفرت
   /// (multiPV=2)، وإلا null.
   final int? secondBestCpWhite;
+  final String? secondBestUci;
 
   const _Eval(
     this.pawns,
@@ -34,6 +36,7 @@ class _Eval {
     this.bestUci,
     this.pv, {
     this.secondBestCpWhite,
+    this.secondBestUci,
   });
 }
 
@@ -90,6 +93,7 @@ class GameAnalysisController extends ChangeNotifier {
   List<MoveQuality> _qualities = <MoveQuality>[];
   List<bool> _isBestEngineMove = <bool>[];
   List<int?> _secondBestCpWhite = <int?>[];
+  List<String?> _secondBestUci = <String?>[];
   List<int?> _moveGapCp = <int?>[];
   List<int?> _tbWdlWhite = <int?>[];
   List<BookMoveInfo?> _bookInfo = <BookMoveInfo?>[];
@@ -132,6 +136,7 @@ class GameAnalysisController extends ChangeNotifier {
   List<MoveQuality> get qualities => _qualities;
   List<bool> get isBestEngineMove => _isBestEngineMove;
   List<int?> get secondBestCpWhite => _secondBestCpWhite;
+  List<String?> get secondBestUci => _secondBestUci;
   List<int?> get moveGapCp => _moveGapCp;
   List<int?> get tbWdlWhite => _tbWdlWhite;
   List<BookMoveInfo?> get bookInfo => _bookInfo;
@@ -190,6 +195,7 @@ class GameAnalysisController extends ChangeNotifier {
       (_) => const <String>[],
     );
     _secondBestCpWhite = List<int?>.filled(_fens.length, null);
+    _secondBestUci = List<String?>.filled(_fens.length, null);
     _isBestEngineMove = List<bool>.filled(_plies.length, false);
     _moveGapCp = List<int?>.filled(_plies.length, null);
     _tbWdlWhite = List<int?>.filled(_fens.length, null);
@@ -272,6 +278,7 @@ class GameAnalysisController extends ChangeNotifier {
       _bestUci[i] = p.bestUci;
       _pvUci[i] = List<String>.of(p.pv);
       _secondBestCpWhite[i] = p.secondBestCpWhite;
+      _secondBestUci[i] = p.secondBestUci;
       _tbWdlWhite[i] = p.tbWdlWhite;
     }
 
@@ -315,6 +322,7 @@ class GameAnalysisController extends ChangeNotifier {
             bestUci: _bestUci[i],
             pv: List<String>.of(_pvUci[i]),
             secondBestCpWhite: _secondBestCpWhite[i],
+            secondBestUci: _secondBestUci[i],
             tbWdlWhite: _tbWdlWhite[i],
           ),
       ],
@@ -360,6 +368,7 @@ class GameAnalysisController extends ChangeNotifier {
     String lastLabel = '0.00';
     List<String> lastPv = const <String>[];
     int? secondBestCp;
+    String? secondBestUci;
 
     _engine.onInfo = null;
     _engine.onBestMove = null;
@@ -377,6 +386,8 @@ class GameAnalysisController extends ChangeNotifier {
           line.evalPawns,
           line.evalLabel,
         );
+        secondBestUci =
+            line.uciMoves.isNotEmpty ? line.uciMoves.first : null;
       }
     };
 
@@ -391,6 +402,7 @@ class GameAnalysisController extends ChangeNotifier {
             uci,
             lastPv,
             secondBestCpWhite: secondBestCp,
+            secondBestUci: secondBestUci,
           ),
         );
       }
@@ -411,6 +423,7 @@ class GameAnalysisController extends ChangeNotifier {
         '',
         lastPv,
         secondBestCpWhite: secondBestCp,
+        secondBestUci: secondBestUci,
       ),
     );
   }
@@ -738,6 +751,7 @@ class GameAnalysisController extends ChangeNotifier {
       _bestUci[i] = r.bestUci;
       _pvUci[i] = r.pv;
       _secondBestCpWhite[i] = r.secondBestCpWhite;
+      _secondBestUci[i] = r.secondBestUci;
       _tbWdlWhite[i] = tbWdl;
 
       _analyzedCount = i + 1;
@@ -783,11 +797,26 @@ class GameAnalysisController extends ChangeNotifier {
         playedUciMove.uci,
       );
 
+      // إن كانت النقلة المُلعَبة هي ثاني أفضل خط للمحرك نفسه
+      // (MultiPV)، فتقييمها من نفس البحث وبنفس العمق أدق وأعدل من
+      // تقييم بحث مستقل للوضعية التالية: نستخدمه في التصنيف فقط.
+      var cpAfterForClass = cpAfter;
+
+      final secondUci = _secondBestUci[i];
+      final secondCp = _secondBestCpWhite[i];
+
+      if (!wasBest &&
+          secondCp != null &&
+          isSameUciMove(secondUci, playedUciMove.uci)) {
+        cpAfterForClass = secondCp;
+      }
+
       var quality = classifyMove(
         cpBeforeWhite: cpBefore,
-        cpAfterWhite: cpAfter,
+        cpAfterWhite: cpAfterForClass,
         color: p.color,
         wasBestMove: wasBest,
+        onlyLegalMove: _legalMoveCount(p.fenBefore) <= 1,
       );
 
       _isBestEngineMove[i] = wasBest;
@@ -985,9 +1014,23 @@ class GameAnalysisController extends ChangeNotifier {
             _legacySacrificeCheck(ply, boardBefore, movingType);
       }
 
-      if (!genuineSacrifice) {
+      // فكرة تكتيكية بدون تضحية: نقلة هادئة (ليست أخذًا) يربح بها
+      // اللاعب مادة بالقوة في خط المحرك.
+      final tacticalIdea = !genuineSacrifice &&
+          !ply.isCapture &&
+          sim != null &&
+          sim.quiet &&
+          -sim.deficit >= 3;
+
+      if (!genuineSacrifice && !tacticalIdea) {
         return null;
       }
+
+      // استرداد بديهي: أخذ مباشر على نفس المربع الذي أُخذ للتو.
+      final obviousRecapture = ply.isCapture &&
+          plyIndex > 0 &&
+          _plies[plyIndex - 1].isCapture &&
+          _plies[plyIndex - 1].to == ply.to;
 
       final beforeGame = ch.Chess();
       beforeGame.load(ply.fenBefore);
@@ -1002,11 +1045,14 @@ class GameAnalysisController extends ChangeNotifier {
 
       final brilliant = isBrilliantCandidate(
         baseQuality: baseQuality,
-        isSacrifice: true,
+        isSacrifice: genuineSacrifice,
         cpBeforeMover: cpBeforeMover,
         onlyLegalMove: legalCount <= 1,
         movingPieceType: movingType,
         secondBestGapCp: secondBestGapCp,
+        isObviousRecapture: obviousRecapture,
+        isTacticalIdea: tacticalIdea,
+        positionHoldsAfter: cpAfterMover >= -50,
       );
 
       return brilliant ? MoveQuality.brilliant : null;
@@ -1193,9 +1239,8 @@ class GameAnalysisController extends ChangeNotifier {
           phase: phaseOf(i),
           materialBefore: nonPawnMaterial(p.fenBefore),
           materialAfter: nonPawnMaterial(p.fenAfter),
-          isCritical: q == MoveQuality.mistake ||
-              q == MoveQuality.blunder ||
-              q == MoveQuality.miss,
+          // تُحدَّد اللحظات الحرجة لاحقًا في markCriticalMoments.
+          isCritical: false,
           isBestMove: i < _isBestEngineMove.length
               ? _isBestEngineMove[i]
               : false,
@@ -1205,6 +1250,11 @@ class GameAnalysisController extends ChangeNotifier {
           isMissedOpportunity: q == MoveQuality.miss,
           isGreat: q == MoveQuality.great,
           bestMoveGapCp: _moveGapCp[i],
+          tablebaseVerdict: tablebaseVerdict(
+            side: p.color,
+            wdlBeforeWhite: _tbWdlWhite[i],
+            wdlAfterWhite: _tbWdlWhite[i + 1],
+          ),
           tablebaseWdlBeforeWhite: _tbWdlWhite[i],
           tablebaseWdlAfterWhite: _tbWdlWhite[i + 1],
           bookInfo: _bookInfo[i],
@@ -1216,6 +1266,6 @@ class GameAnalysisController extends ChangeNotifier {
       );
     }
 
-    return results;
+    return markCriticalMoments(results);
   }
 }

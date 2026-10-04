@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'analysis_controller.dart';
+import 'analysis_result.dart';
+import 'analysis_rules.dart';
 import 'app_settings.dart';
 import 'board_widget.dart';
 import 'game_review_models.dart';
@@ -569,29 +571,19 @@ class _GameAnalysisScreenState
   /// Stockfish المخزَّنة مباشرة (وليست مُخترَعة). قيمة أقل
   /// = لعب أدق. null يعني عدم توفر بيانات كافية بعد.
   Map<String, double?> get _acplBySide {
-    if (_qualities.isEmpty) {
+    final results = _c.results;
+
+    if (results.isEmpty) {
       return {'w': null, 'b': null};
     }
 
-    double whiteSum = 0, blackSum = 0;
-    int whiteN = 0, blackN = 0;
-
-    for (var i = 0; i < _qualities.length; i++) {
-      final loss =
-          _lossAt(i).clamp(0, 1 << 30).toDouble();
-
-      if (_plies[i].color == 'w') {
-        whiteSum += loss;
-        whiteN++;
-      } else {
-        blackSum += loss;
-        blackN++;
-      }
-    }
+    // الحساب في analysis_rules.dart: من منظور اللاعب الذي نفّذ النقلة،
+    // مع تقييد التقييم ±1000 قرن كي لا يفسد المات المتوسط.
+    final acpl = computeAcpl(results);
 
     return {
-      'w': whiteN > 0 ? (whiteSum / whiteN) / 100 : null,
-      'b': blackN > 0 ? (blackSum / blackN) / 100 : null,
+      'w': acpl.white == null ? null : acpl.white! / 100,
+      'b': acpl.black == null ? null : acpl.black! / 100,
     };
   }
 
@@ -803,29 +795,21 @@ class _GameAnalysisScreenState
   /// أكبر اللحظات الحرجة (أخطاء/فرص ضائعة) مرتبة تنازليًا حسب
   /// حجم خسارة التقييم.
   List<_CriticalMoment> get _criticalMoments {
-    final moments = <_CriticalMoment>[];
-
-    for (var i = 0; i < _qualities.length; i++) {
-      final q = _qualities[i];
-
-      if (q == MoveQuality.mistake ||
-          q == MoveQuality.blunder ||
-          q == MoveQuality.miss) {
-        moments.add(
+    final moments = <_CriticalMoment>[
+      for (final m in _c.results)
+        if (m.isCritical)
           _CriticalMoment(
-            plyIndex: i,
-            quality: q,
-            lossCp: _lossAt(i),
+            plyIndex: m.ply,
+            quality: m.classification,
+            lossCp: m.evaluationLossCp.clamp(0, 1000),
+            score: m.criticalScore,
+            kind: m.criticalKind ?? 'swing',
           ),
-        );
-      }
-    }
+    ];
 
-    moments.sort(
-      (a, b) => b.lossCp.compareTo(a.lossCp),
-    );
+    moments.sort((a, b) => b.score.compareTo(a.score));
 
-    return moments.take(8).toList();
+    return moments;
   }
 
   // ============================================================
@@ -2521,9 +2505,12 @@ class _GameAnalysisScreenState
         _EvalGraph(
           evalPawns: _evalPawns,
           qualities: _qualities,
+          moves: _c.results,
           currentIndex: _currentIndex,
           onSelect: (i) => _jumpAndShowBoard(i),
         ),
+        const SizedBox(height: 8),
+        _buildGraphMoveInfo(),
         const SizedBox(height: 16),
 
         // --------------------------------------------------
@@ -2793,6 +2780,79 @@ class _GameAnalysisScreenState
     );
   }
 
+  /// تفاصيل النقلة المحددة على الرسم البياني (من
+  /// List<MoveAnalysisResult> نفسها التي تقرأها بقية الواجهة).
+  Widget _buildGraphMoveInfo() {
+    final results = _c.results;
+    final k = _currentIndex - 1;
+
+    if (results.isEmpty || k < 0 || k >= results.length) {
+      return Text(
+        'اضغط على الرسم لاختيار نقلة.',
+        style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+      );
+    }
+
+    final r = results[k];
+    final info = moveQualityInfo[r.classification]!;
+
+    String loss(int cp) => (cp.clamp(0, 1000) / 100).toStringAsFixed(2);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.grey.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: r.isCritical
+            ? Border.all(color: Colors.amber.withValues(alpha: 0.6))
+            : null,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'النقلة ${r.moveNumber}${r.side == 'w' ? '.' : '...'} '
+            '${r.san}  •  ${info.label}'
+            '${r.isCritical ? '  •  لحظة حرجة' : ''}',
+            style: TextStyle(
+              color: info.color,
+              fontWeight: FontWeight.bold,
+            ),
+            textDirection: TextDirection.ltr,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'التقييم قبل: ${_evalLabels[k]}   بعد: ${_evalLabels[k + 1]}   '
+            'الخسارة: ${loss(r.evaluationLossCp)}',
+            style: const TextStyle(fontSize: 12),
+          ),
+          if (r.bestMoveSan.isNotEmpty && !r.isBestMove)
+            Text(
+              'الأفضل: ${r.bestMoveSan}',
+              style: const TextStyle(fontSize: 12),
+              textDirection: TextDirection.ltr,
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// ACPL لكل لاعب في مرحلة معيّنة (بوحدة البيدق)، أو null.
+  String? _phaseAcplText(String phaseKey) {
+    if (_c.results.isEmpty) return null;
+
+    final p = computeAcpl(_c.results).byPhase[phaseKey];
+
+    if (p == null) return null;
+
+    String f(double? v) => v == null ? '—' : (v / 100).toStringAsFixed(2);
+
+    if (p['w'] == null && p['b'] == null) return null;
+
+    return 'ACPL ⚪${f(p['w'])} ⚫${f(p['b'])}';
+  }
+
   Widget _phaseDetailCard(String label, String phaseKey) {
     final stat = _phaseStatsFull[phaseKey]!;
 
@@ -2825,12 +2885,25 @@ class _GameAnalysisScreenState
             ),
           ),
           Expanded(
-            child: Text(
-              'دقة ${stat.accuracy.toStringAsFixed(0)}%',
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontWeight: FontWeight.w600,
-              ),
+            child: Column(
+              children: [
+                Text(
+                  'دقة ${stat.accuracy.toStringAsFixed(0)}%',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                if (_phaseAcplText(phaseKey) != null)
+                  Text(
+                    _phaseAcplText(phaseKey)!,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 11,
+                    ),
+                  ),
+              ],
             ),
           ),
           Expanded(
@@ -3150,8 +3223,13 @@ class _GameAnalysisScreenState
               '${ply.san}${_sanSuffix(m.quality)}',
             ),
             subtitle: Text(
-              '${info.label} • خسارة تقييم'
-              ' ${(m.lossCp / 100).toStringAsFixed(2)}',
+              m.kind == 'only_move'
+                  ? '${info.label} • نقلة وحيدة أُدّيت بدقة'
+                  : (m.kind == 'tablebase'
+                      ? '${info.label} • تغيّرت النتيجة المضمونة '
+                          '(Tablebase)'
+                      : '${info.label} • خسارة تقييم'
+                          ' ${(m.lossCp / 100).toStringAsFixed(2)}'),
             ),
             onTap: () => _jumpAndShowBoard(
               m.plyIndex + 1,
@@ -3175,11 +3253,17 @@ class _CriticalMoment {
   final int plyIndex;
   final MoveQuality quality;
   final int lossCp;
+  final double score;
+
+  /// swing / only_move / tablebase
+  final String kind;
 
   const _CriticalMoment({
     required this.plyIndex,
     required this.quality,
     required this.lossCp,
+    this.score = 0,
+    this.kind = 'swing',
   });
 }
 
@@ -3203,12 +3287,14 @@ class _PhaseStat {
 class _EvalGraph extends StatelessWidget {
   final List<double> evalPawns;
   final List<MoveQuality> qualities;
+  final List<MoveAnalysisResult> moves;
   final int currentIndex;
   final void Function(int index) onSelect;
 
   const _EvalGraph({
     required this.evalPawns,
     required this.qualities,
+    required this.moves,
     required this.currentIndex,
     required this.onSelect,
   });
@@ -3252,6 +3338,7 @@ class _EvalGraph extends StatelessWidget {
             painter: _EvalGraphPainter(
               evalPawns: evalPawns,
               qualities: qualities,
+              moves: moves,
               currentIndex: currentIndex,
             ),
           ),
@@ -3264,11 +3351,13 @@ class _EvalGraph extends StatelessWidget {
 class _EvalGraphPainter extends CustomPainter {
   final List<double> evalPawns;
   final List<MoveQuality> qualities;
+  final List<MoveAnalysisResult> moves;
   final int currentIndex;
 
   const _EvalGraphPainter({
     required this.evalPawns,
     required this.qualities,
+    required this.moves,
     required this.currentIndex,
   });
 
@@ -3358,6 +3447,39 @@ class _EvalGraphPainter extends CustomPainter {
       }
     }
 
+    // علامات إضافية من List<MoveAnalysisResult>: رائعة / مدهشة
+    // بنقطة، واللحظات الحرجة بحلقة ذهبية.
+    for (final m in moves) {
+      final idx = m.ply + 1;
+
+      if (idx >= n || idx >= evalPawns.length) continue;
+
+      final center = Offset(
+        _xAt(idx, n, size.width),
+        _yAt(evalPawns[idx], size.height),
+      );
+
+      if (m.classification == MoveQuality.brilliant ||
+          m.classification == MoveQuality.great) {
+        canvas.drawCircle(
+          center,
+          3.5,
+          Paint()..color = moveQualityInfo[m.classification]!.color,
+        );
+      }
+
+      if (m.isCritical) {
+        canvas.drawCircle(
+          center,
+          6.5,
+          Paint()
+            ..color = Colors.amber
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.6,
+        );
+      }
+    }
+
     // مؤشر الموضع الحالي.
     if (currentIndex >= 0 && currentIndex < n) {
       final x = _xAt(currentIndex, n, size.width);
@@ -3387,7 +3509,8 @@ class _EvalGraphPainter extends CustomPainter {
   ) {
     return oldDelegate.currentIndex != currentIndex ||
         oldDelegate.evalPawns != evalPawns ||
-        oldDelegate.qualities != qualities;
+        oldDelegate.qualities != qualities ||
+        oldDelegate.moves != moves;
   }
 }
 

@@ -5,7 +5,7 @@ import 'lichess_data_service.dart' show BookMoveInfo;
 /// قواعد التصنيف أو تخطيط البيانات المحفوظة، فلا تُخلط النتائج
 /// القديمة بالجديدة: مفتاح الكاش يتضمنه، وأي ملف محفوظ بإصدار آخر
 /// يُتجاهل.
-const int kAnalysisVersion = 1;
+const int kAnalysisVersion = 2;
 
 /// نسخة المحرك المسجَّلة مع التحليل.
 const String kEngineVersion = 'stockfish19';
@@ -38,8 +38,10 @@ class PositionAnalysis {
   final String bestUci;
   final List<String> pv;
 
-  /// تقييم ثاني أفضل نقلة (قرن، منظور الأبيض) إن توفر.
+  /// تقييم ثاني أفضل نقلة (قرن، منظور الأبيض) ونقلتها (UCI) إن
+  /// توفرا (MultiPV = 2).
   final int? secondBestCpWhite;
+  final String? secondBestUci;
 
   /// نتيجة Tablebase المضمونة (منظور الأبيض: 1 / 0 / -1) إن توفرت.
   final int? tbWdlWhite;
@@ -51,6 +53,7 @@ class PositionAnalysis {
     required this.bestUci,
     required this.pv,
     this.secondBestCpWhite,
+    this.secondBestUci,
     this.tbWdlWhite,
   });
 
@@ -61,6 +64,7 @@ class PositionAnalysis {
         'b': bestUci,
         'pv': pv,
         'sb': secondBestCpWhite,
+        'sbu': secondBestUci,
         'tb': tbWdlWhite,
       };
 
@@ -74,6 +78,7 @@ class PositionAnalysis {
       bestUci: m['b']?.toString() ?? '',
       pv: _list<String>(m['pv'], (e) => e.toString()),
       secondBestCpWhite: _asInt(m['sb']),
+      secondBestUci: m['sbu']?.toString(),
       tbWdlWhite: _asInt(m['tb']),
     );
   }
@@ -125,6 +130,15 @@ class MoveAnalysisResult {
   final bool isMissedOpportunity;
   final bool isGreat;
 
+  /// درجة حرجة النقلة ونوعها ('swing' / 'only_move' / 'tablebase')،
+  /// يُحسبان بعد اكتمال التحليل (انظر analysis_rules.dart).
+  final double criticalScore;
+  final String? criticalKind;
+
+  /// حكم Tablebase على النقلة: lostWin / missedWin / blunder / best /
+  /// gain، أو null.
+  final String? tablebaseVerdict;
+
   /// الفارق بين أفضل نقلة وثاني أفضل (قرن، منظور اللاعب).
   final int? bestMoveGapCp;
 
@@ -167,6 +181,9 @@ class MoveAnalysisResult {
     required this.isBlunder,
     required this.isMissedOpportunity,
     this.isGreat = false,
+    this.criticalScore = 0,
+    this.criticalKind,
+    this.tablebaseVerdict,
     this.evaluationBeforeWhiteCp = 0,
     this.evaluationAfterWhiteCp = 0,
     this.bestMoveGapCp,
@@ -178,6 +195,51 @@ class MoveAnalysisResult {
     this.maiaTopUci,
     this.maiaBucket,
   });
+
+  MoveAnalysisResult copyWith({
+    bool? isCritical,
+    double? criticalScore,
+    String? criticalKind,
+  }) =>
+      MoveAnalysisResult(
+        ply: ply,
+        moveNumber: moveNumber,
+        side: side,
+        san: san,
+        uci: uci,
+        fenBefore: fenBefore,
+        fenAfter: fenAfter,
+        evaluationBeforeCp: evaluationBeforeCp,
+        evaluationAfterCp: evaluationAfterCp,
+        evaluationLossCp: evaluationLossCp,
+        evaluationBeforeWhiteCp: evaluationBeforeWhiteCp,
+        evaluationAfterWhiteCp: evaluationAfterWhiteCp,
+        bestMoveSan: bestMoveSan,
+        bestMoveUci: bestMoveUci,
+        principalVariationUci: principalVariationUci,
+        classification: classification,
+        phase: phase,
+        materialBefore: materialBefore,
+        materialAfter: materialAfter,
+        isCritical: isCritical ?? this.isCritical,
+        isBestMove: isBestMove,
+        isBrilliant: isBrilliant,
+        isMistake: isMistake,
+        isBlunder: isBlunder,
+        isMissedOpportunity: isMissedOpportunity,
+        isGreat: isGreat,
+        criticalScore: criticalScore ?? this.criticalScore,
+        criticalKind: criticalKind ?? this.criticalKind,
+        tablebaseVerdict: tablebaseVerdict,
+        bestMoveGapCp: bestMoveGapCp,
+        tablebaseWdlBeforeWhite: tablebaseWdlBeforeWhite,
+        tablebaseWdlAfterWhite: tablebaseWdlAfterWhite,
+        bookInfo: bookInfo,
+        maiaProbability: maiaProbability,
+        maiaBestProbability: maiaBestProbability,
+        maiaTopUci: maiaTopUci,
+        maiaBucket: maiaBucket,
+      );
 
   /// نتيجة Tablebase بعد النقلة من منظور اللاعب الذي نفّذها:
   /// 'win' / 'draw' / 'loss'، أو null إن لم تتوفر.
@@ -214,6 +276,9 @@ class MoveAnalysisResult {
         'crit': isCritical,
         'best': isBestMove,
         'great': isGreat,
+        'cs': criticalScore,
+        'ck': criticalKind,
+        'tbv': tablebaseVerdict,
         'gap': bestMoveGapCp,
         'tbb': tablebaseWdlBeforeWhite,
         'tba': tablebaseWdlAfterWhite,
@@ -257,6 +322,9 @@ class MoveAnalysisResult {
       isBlunder: q == MoveQuality.blunder,
       isMissedOpportunity: q == MoveQuality.miss,
       isGreat: m['great'] == true || q == MoveQuality.great,
+      criticalScore: _asDouble(m['cs']) ?? 0,
+      criticalKind: m['ck']?.toString(),
+      tablebaseVerdict: m['tbv']?.toString(),
       bestMoveGapCp: _asInt(m['gap']),
       tablebaseWdlBeforeWhite: _asInt(m['tbb']),
       tablebaseWdlAfterWhite: _asInt(m['tba']),
