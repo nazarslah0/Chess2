@@ -240,7 +240,7 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
     if (mounted) setState(() {});
   }
 
-  /// تنفيذ نقلة UCI على الرقعة (عند لمس نقلة في الكتاب أو Maia أو
+  /// تنفيذ نقلة UCI على الرقعة (عند لمس نقلة في الكتاب أو
   /// Tablebase).
   void _playUci(String uci) {
     final move = parseUci(uci);
@@ -1103,7 +1103,7 @@ class _PositionAnalyzerScreenState extends State<PositionAnalyzerScreen> {
               ),
 
               // =================================================
-              // الكتاب + Tablebase + Maia
+              // الكتاب + Tablebase
               // =================================================
 
               PositionInsightsPanel(

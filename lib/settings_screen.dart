@@ -2,11 +2,10 @@ import 'package:flutter/material.dart';
 
 import 'app_settings.dart';
 import 'board_widget.dart';
-import 'maia_service.dart';
 import 'models.dart';
 
 /// الإعدادات العامة: ثيم الرقعة والقطع (تنطبق على كل رقع التطبيق)،
-/// مستوى Maia الافتراضي، واسمك في المباريات.
+/// واسمك في المباريات.
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
 
@@ -22,17 +21,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late final TextEditingController _nameCtrl =
       TextEditingController(text: _s.playerName);
 
-  List<int> _maiaAvailable = const <int>[];
-
   @override
   void initState() {
     super.initState();
 
     _preview.startPosition();
-
-    MaiaService.availableBuckets().then((v) {
-      if (mounted) setState(() => _maiaAvailable = v);
-    });
   }
 
   @override
@@ -108,36 +101,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onChanged: (v) {
                     if (v != null) _s.setPieceTheme(v);
                   },
-                ),
-                const Divider(height: 32),
-                const Text(
-                  'Maia',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  _maiaAvailable.isEmpty
-                      ? 'لم يتم العثور على أوزان Maia في التطبيق '
-                          '(انظر assets/maia/README.txt).'
-                      : 'المستوى الافتراضي في تحليل الوضعية واللعب:',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey.shade600,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  children: [
-                    for (final b in MaiaService.buckets)
-                      ChoiceChip(
-                        label: Text('$b'),
-                        selected: _s.maiaBucket == b,
-                        onSelected: _maiaAvailable.contains(b)
-                            ? (_) => _s.setMaiaBucket(b)
-                            : null,
-                      ),
-                  ],
                 ),
                 const Divider(height: 32),
                 const Text(

@@ -74,7 +74,6 @@ class _GameAnalysisScreenState
   List<int?> get _moveGapCp => _c.moveGapCp;
   List<int?> get _tbWdlWhite => _c.tbWdlWhite;
   List<BookMoveInfo?> get _bookInfo => _c.bookInfo;
-  int get _puzzlesAdded => _c.puzzlesAdded;
   bool get _analyzing => _c.analyzing;
   bool get _cancelled => _c.cancelled;
   bool get _servedFromCache => _c.servedFromCache;
@@ -82,7 +81,6 @@ class _GameAnalysisScreenState
   int get _analyzedCount => _c.analyzedCount;
 
   int _cpAt(int i) => _c.cpAt(i);
-  String _plyUci(int i) => _c.plyUci(i);
   int _lossAt(int i) => _c.lossAt(i);
   double _accuracyAt(int i) => _c.accuracyAt(i);
   String _phaseOf(int plyIndex) => _c.phaseOf(plyIndex);

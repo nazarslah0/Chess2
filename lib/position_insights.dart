@@ -1,17 +1,13 @@
 import 'dart:async';
 
-import 'package:chess/chess.dart' as ch;
 import 'package:flutter/material.dart';
 
-import 'app_settings.dart';
 import 'lichess_data_service.dart';
-import 'maia_service.dart';
-import 'models.dart';
 import 'uci_utils.dart';
 
 /// مصادر إضافية لشاشة تحليل الوضعية، تُحدَّث تلقائيًا عند تغيّر
 /// الوضعية: نقلات الكتاب (Opening Explorer)، نتيجة Tablebase المضمونة
-/// (7 قطع أو أقل)، وتوقّعات Maia لما يلعبه لاعبو مستوى معيّن. وتُعلَّم
+/// (7 قطع أو أقل)، وتُعلَّم
 /// بنجمة النقلة التي اختارها Stockfish.
 class PositionInsightsPanel extends StatefulWidget {
   final String fen;
@@ -38,14 +34,6 @@ class PositionInsightsPanel extends StatefulWidget {
       _PositionInsightsPanelState();
 }
 
-class _MaiaRow {
-  final String uci;
-  final String san;
-  final double prob;
-
-  const _MaiaRow(this.uci, this.san, this.prob);
-}
-
 class _PositionInsightsPanelState extends State<PositionInsightsPanel> {
   Timer? _debounce;
   int _req = 0;
@@ -62,27 +50,12 @@ class _PositionInsightsPanelState extends State<PositionInsightsPanel> {
   bool _tbLoading = false;
   TablebaseDetail? _tb;
 
-  // Maia
-  List<int> _available = const <int>[];
-  bool _availableLoaded = false;
-  String _maiaState = 'idle'; // idle/loading/ok/nomodel/error
-  List<_MaiaRow> _maia = const <_MaiaRow>[];
-  MaiaSession? _session;
-  int? _sessionBucket;
-  int? _shownBucket;
-  Future<void> _maiaChain = Future<void>.value();
-
   @override
   void initState() {
     super.initState();
 
-    MaiaService.availableBuckets().then((v) {
-      if (!mounted) return;
-
-      _available = v;
-      _availableLoaded = true;
-
-      _schedule();
+    Future<void>.microtask(() {
+      if (mounted) _schedule();
     });
   }
 
@@ -99,7 +72,6 @@ class _PositionInsightsPanelState extends State<PositionInsightsPanel> {
   void dispose() {
     _debounce?.cancel();
     _req++;
-    _session?.close();
     super.dispose();
   }
 
@@ -108,7 +80,7 @@ class _PositionInsightsPanelState extends State<PositionInsightsPanel> {
 
     final req = ++_req;
 
-    if (!widget.enabled || !_availableLoaded) {
+    if (!widget.enabled) {
       setState(() {
         _bookLoading = false;
         _tbLoading = false;
@@ -116,8 +88,6 @@ class _PositionInsightsPanelState extends State<PositionInsightsPanel> {
         _tb = null;
         _masters = null;
         _lichess = null;
-        _maia = const <_MaiaRow>[];
-        _maiaState = 'idle';
       });
 
       return;
@@ -129,7 +99,6 @@ class _PositionInsightsPanelState extends State<PositionInsightsPanel> {
       _tbEligible = TablebaseService.isEligible(widget.fen);
       _tbLoading = _tbEligible;
       _tb = null;
-      _maiaState = _available.isEmpty ? 'nomodel' : 'loading';
     });
 
     final fen = widget.fen;
@@ -138,12 +107,6 @@ class _PositionInsightsPanelState extends State<PositionInsightsPanel> {
       _loadBook(fen, req);
 
       if (_tbEligible) _loadTablebase(fen, req);
-
-      if (_available.isNotEmpty) {
-        _maiaChain = _maiaChain
-            .then((_) => _loadMaia(fen, req))
-            .catchError((Object _) {});
-      }
     });
   }
 
@@ -178,87 +141,6 @@ class _PositionInsightsPanelState extends State<PositionInsightsPanel> {
     });
   }
 
-  Future<void> _loadMaia(String fen, int req) async {
-    if (!mounted || req != _req) return;
-
-    final bucket = MaiaService.nearestAvailable(
-      AppSettings.instance.maiaBucket,
-      _available,
-    );
-
-    if (bucket == null) {
-      setState(() => _maiaState = 'nomodel');
-      return;
-    }
-
-    if (_session == null || _sessionBucket != bucket) {
-      await _session?.close();
-
-      _session = await MaiaSession.open(bucket);
-      _sessionBucket = bucket;
-    }
-
-    if (!mounted || req != _req) return;
-
-    final session = _session;
-
-    if (session == null) {
-      setState(() => _maiaState = 'error');
-      return;
-    }
-
-    final policy = await session.policy(
-      startFen: fen,
-      movesUci: const <String>[],
-    );
-
-    if (!mounted || req != _req) return;
-
-    if (policy == null) {
-      setState(() {
-        _maia = const <_MaiaRow>[];
-        _maiaState = 'error';
-      });
-
-      return;
-    }
-
-    final rows = <_MaiaRow>[
-      for (final e in MaiaService.ranked(policy).take(6))
-        if (parseUci(e.key) != null)
-          _MaiaRow(e.key, _san(fen, e.key), e.value),
-    ];
-
-    setState(() {
-      _maia = rows;
-      _shownBucket = bucket;
-      _maiaState = 'ok';
-    });
-  }
-
-  static String _san(String fen, String uci) {
-    try {
-      final c = ch.Chess();
-
-      if (c.load(fen) == false) return uci;
-
-      final move = parseUci(uci);
-
-      if (move == null) return uci;
-
-      final m = GameState.findLegalMove(
-        c,
-        move.from,
-        move.to,
-        move.promotion,
-      );
-
-      return (m?['san'] ?? uci).toString();
-    } catch (_) {
-      return uci;
-    }
-  }
-
   bool _isEngineBest(String uci) {
     return isSameUciMove(widget.engineBestUci, uci);
   }
@@ -280,8 +162,6 @@ class _PositionInsightsPanelState extends State<PositionInsightsPanel> {
           const SizedBox(height: 12),
           _buildTablebase(),
         ],
-        const SizedBox(height: 12),
-        _buildMaia(),
       ],
     );
   }
@@ -579,107 +459,6 @@ class _PositionInsightsPanelState extends State<PositionInsightsPanel> {
             Text(
               dist,
               style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ---------------- Maia ----------------
-
-  Widget _buildMaia() {
-    Widget body;
-
-    switch (_maiaState) {
-      case 'nomodel':
-        body = _hint(
-          'لم يتم العثور على أوزان Maia. ضعها في assets/maia/ '
-          '(انظر README).',
-        );
-        break;
-      case 'loading':
-        body = const LinearProgressIndicator();
-        break;
-      case 'error':
-        body = _hint('تعذّر تشغيل Maia على هذا الجهاز.');
-        break;
-      case 'ok':
-        body = Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _hint(
-              'ما يلعبه لاعب بتصنيف ${_shownBucket ?? ''} في هذه الوضعية',
-            ),
-            const SizedBox(height: 6),
-            for (final r in _maia) _maiaRow(r),
-          ],
-        );
-        break;
-      default:
-        body = _hint('—');
-    }
-
-    return _card(
-      'Maia (نقلات بشرية)',
-      body,
-      trailing: _available.length > 1
-          ? Wrap(
-              spacing: 6,
-              children: [
-                for (final b in _available)
-                  ChoiceChip(
-                    label: Text('$b'),
-                    selected: _shownBucket == b ||
-                        (_shownBucket == null &&
-                            AppSettings.instance.maiaBucket == b),
-                    onSelected: (_) async {
-                      await AppSettings.instance.setMaiaBucket(b);
-
-                      _schedule();
-                    },
-                  ),
-              ],
-            )
-          : null,
-    );
-  }
-
-  Widget _maiaRow(_MaiaRow r) {
-    return InkWell(
-      onTap: () => widget.onPlayMove(r.uci),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Row(
-          children: [
-            SizedBox(
-              width: 74,
-              child: Row(
-                children: [
-                  Text(
-                    r.san,
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                    textDirection: TextDirection.ltr,
-                  ),
-                  if (_isEngineBest(r.uci)) _star(),
-                ],
-              ),
-            ),
-            SizedBox(
-              width: 44,
-              child: Text(
-                _pct(r.prob),
-                style: const TextStyle(fontSize: 12),
-              ),
-            ),
-            Expanded(
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(4),
-                child: LinearProgressIndicator(
-                  value: r.prob.clamp(0.0, 1.0),
-                  minHeight: 10,
-                ),
-              ),
             ),
           ],
         ),

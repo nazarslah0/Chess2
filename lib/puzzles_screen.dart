@@ -10,8 +10,8 @@ import 'puzzle_storage.dart';
 import 'sound_service.dart';
 import 'uci_utils.dart';
 
-/// تمارين من مبارياتك: وضعيات فاتتك فيها نقلة قوية (يفوّتها غالبًا
-/// لاعبو مستواك بحسب Maia). تُستخرج تلقائيًا عند تحليل أي مباراة.
+/// تمارين من مبارياتك: وضعيات فاتتك فيها نقلة قوية. تُستخرج تلقائيًا
+/// عند تحليل أي مباراة.
 class PuzzlesScreen extends StatefulWidget {
   const PuzzlesScreen({super.key});
 
@@ -237,10 +237,6 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
   Widget _buildPuzzle(PuzzleItem p) {
     final sideName = p.turn == 'w' ? 'الأبيض' : 'الأسود';
 
-    final maiaText = (p.maiaBestProb != null && p.maiaBucket != null)
-        ? 'يجدها ${_pct(p.maiaBestProb!)} فقط من لاعبي ${p.maiaBucket}'
-        : null;
-
     final showSolution = _revealed || _solved;
 
     return SingleChildScrollView(
@@ -263,7 +259,6 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
             child: Text(
               [
                 if (p.label.isNotEmpty) p.label,
-                ?maiaText,
                 if (p.solvedCount > 0) 'حُلّ ${p.solvedCount}×',
               ].join(' • '),
               style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
@@ -364,11 +359,5 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
         ],
       ),
     );
-  }
-
-  static String _pct(double p) {
-    final v = p * 100;
-
-    return v < 1 ? 'أقل من 1%' : '${v.toStringAsFixed(0)}%';
   }
 }
